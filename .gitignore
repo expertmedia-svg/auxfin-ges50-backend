@@ -1,0 +1,41 @@
+# Environnement virtuel Python — jamais commit (reconstruit via
+# `python -m venv .venv && pip install -e ".[dev]"`, voir README).
+.venv/
+venv/
+env/
+
+# Bytecode / caches Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Artefacts de build
+build/
+dist/
+
+# File d'attente Celery (transport filesystem:// de developpement) : etat
+# transitoire, jamais versionne.
+control/
+
+# Secrets / config locale
+.env
+.env.*
+!.env.example
+
+# Bases de donnees locales (SQLite dev)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Editeurs / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
