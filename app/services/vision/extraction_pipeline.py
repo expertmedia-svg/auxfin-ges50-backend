@@ -196,7 +196,14 @@ def extract_from_video(
             icon_result = detect_status_icon_color(frame.path, status_icon_zone)
             if icon_result.is_green:
                 icon_confirmation = icon_result
-        if status_result.status != SyncStatus.UNCONFIRMED or icon_confirmation is not None:
+        sync_confirmed = status_result.status != SyncStatus.UNCONFIRMED or icon_confirmation is not None
+        # Ne s'arrete tot que si l'ID est deja connu (trouve dans les frames de
+        # debut) : sinon on continue de scanner les frames de fin restantes,
+        # car certaines applications n'affichent l'ID que sur l'ecran final
+        # (bug reel signale : ID jamais capte quand il n'apparait qu'en toute
+        # fin de video, la confirmation de sync arrivant sur une frame plus
+        # tot dans la boucle interrompait le scan avant d'y arriver).
+        if sync_confirmed and id_found:
             break
 
     start_text = "\n".join(start_text_parts)

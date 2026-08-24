@@ -58,6 +58,11 @@ class EvidenceOut(BaseModel):
     received_at: datetime
     is_duplicate_of_id: str | None
     extraction: EvidenceExtractionOut | None = None
+    # Groupe WhatsApp d'origine (via whatsapp_messages.evidence_id) — None si
+    # la preuve ne vient pas de la passerelle WhatsApp (upload manuel) ou si
+    # le groupe n'a jamais ete rafraichi depuis Centre WhatsApp.
+    whatsapp_group_name: str | None = None
+    whatsapp_group_external_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -78,4 +83,9 @@ class EvidenceCorrection(BaseModel):
 
 
 class ManualReviewDecisionIn(BaseModel):
+    comment: str | None = None
+
+
+class EvidenceStatusIn(BaseModel):
+    status: str
     comment: str | None = None

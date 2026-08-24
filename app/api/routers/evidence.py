@@ -17,11 +17,13 @@ from app.models.enums import EvidenceSource, ManualReviewDecision, ProcessingSta
 from app.models.evidence import EvidenceExtraction, EvidenceFile, EvidenceFrame, OcrResult
 from app.models.identity import User
 from app.models.reconciliation import ManualReview
+from app.models.whatsapp import WhatsAppGroup, WhatsAppMessage
 from app.schemas.evidence import (
     EvidenceCorrection,
     EvidenceExtractionOut,
     EvidenceFrameOut,
     EvidenceOut,
+    EvidenceStatusIn,
     EvidenceUploadReport,
     ManualReviewDecisionIn,
     OcrResultOut,
@@ -119,6 +121,33 @@ def upload_evidence(
     )
 
 
+def _attach_whatsapp_origin(db: Session, items: list[EvidenceFile]) -> list[EvidenceFile]:
+    """Peuple whatsapp_group_name/whatsapp_group_external_id sur chaque
+    EvidenceFile a partir de whatsapp_messages.evidence_id — pas de
+    relationship ORM dediee (WhatsAppMessage.evidence_id est deja la FK, pas
+    la peine d'en ajouter une seconde dans l'autre sens) : une seule requete
+    groupee pour toute la page, pas de N+1."""
+    ids = [e.id for e in items]
+    if not ids:
+        return items
+    rows = (
+        db.query(WhatsAppMessage.evidence_id, WhatsAppGroup.name, WhatsAppGroup.whatsapp_group_external_id)
+        .join(WhatsAppGroup, WhatsAppMessage.group_id == WhatsAppGroup.id)
+        .filter(WhatsAppMessage.evidence_id.in_(ids))
+        .all()
+    )
+    # Un media resenvoye peut apparaitre dans plusieurs messages/groupes :
+    # on garde le premier trouve, suffisant pour l'affichage "origine".
+    origin_by_evidence: dict[str, tuple[str, str]] = {}
+    for evidence_id, group_name, group_external_id in rows:
+        origin_by_evidence.setdefault(evidence_id, (group_name, group_external_id))
+    for e in items:
+        origin = origin_by_evidence.get(e.id)
+        if origin:
+            e.whatsapp_group_name, e.whatsapp_group_external_id = origin
+    return items
+
+
 @router.get("", response_model=list[EvidenceOut])
 def list_evidence(
     application_id: str | None = None,
@@ -139,7 +168,8 @@ def list_evidence(
         query = query.filter(EvidenceFile.media_type == media_type)
     if requires_review:
         query = query.filter(EvidenceFile.processing_status == ProcessingStatus.REQUIRES_REVIEW)
-    return query.order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all()
+    items = query.order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all()
+    return _attach_whatsapp_origin(db, items)
 
 
 @router.get("/{evidence_id}", response_model=EvidenceOut)
@@ -149,6 +179,7 @@ def get_evidence(
     evidence = db.get(EvidenceFile, evidence_id)
     if evidence is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Preuve introuvable")
+    _attach_whatsapp_origin(db, [evidence])
     return evidence
 
 
@@ -276,6 +307,56 @@ def correct_evidence(
     db.commit()
     db.refresh(extraction)
     return extraction
+
+
+# Statuts qu'un operateur peut fixer manuellement depuis la page Preuves.
+# PENDING/QUEUED/PROCESSING sont volontairement exclus : ce sont des etats
+# transitoires du pipeline (worker Celery), les imposer manuellement ferait
+# croire qu'un traitement est en cours alors que rien ne tourne reellement —
+# utiliser "Relancer" (reanalyze) pour redemarrer un vrai traitement.
+_MANUALLY_SETTABLE_STATUSES = {
+    ProcessingStatus.COMPLETED,
+    ProcessingStatus.FAILED,
+    ProcessingStatus.REQUIRES_REVIEW,
+    ProcessingStatus.DUPLICATE,
+}
+
+
+@router.patch("/{evidence_id}/status", response_model=EvidenceOut)
+def set_evidence_status(
+    evidence_id: str,
+    payload: EvidenceStatusIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+) -> EvidenceFile:
+    evidence = db.get(EvidenceFile, evidence_id)
+    if evidence is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Preuve introuvable")
+    try:
+        new_status = ProcessingStatus(payload.status)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Statut invalide: {payload.status}") from exc
+    if new_status not in _MANUALLY_SETTABLE_STATUSES:
+        allowed = ", ".join(s.value for s in _MANUALLY_SETTABLE_STATUSES)
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Statut '{new_status.value}' non modifiable manuellement (autorises : {allowed}). "
+            "Utilisez 'Relancer' pour redemarrer un vrai traitement.",
+        )
+    previous_status = evidence.processing_status
+    evidence.processing_status = new_status
+    record_audit(
+        db, user_id=user.id, action="evidence.status_override", entity_type="evidence_file", entity_id=evidence.id,
+        details={
+            "previous_status": previous_status.value if hasattr(previous_status, "value") else previous_status,
+            "new_status": new_status.value,
+            "comment": payload.comment,
+        },
+    )
+    db.commit()
+    db.refresh(evidence)
+    _attach_whatsapp_origin(db, [evidence])
+    return evidence
 
 
 @router.post("/{evidence_id}/validate", status_code=status.HTTP_204_NO_CONTENT)
