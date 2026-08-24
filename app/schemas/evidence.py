@@ -55,6 +55,7 @@ class EvidenceOut(BaseModel):
     application_detected_id: str | None
     agent_id: str | None
     sender_name: str | None
+    sender_phone: str | None
     received_at: datetime
     is_duplicate_of_id: str | None
     extraction: EvidenceExtractionOut | None = None
@@ -63,6 +64,11 @@ class EvidenceOut(BaseModel):
     # le groupe n'a jamais ete rafraichi depuis Centre WhatsApp.
     whatsapp_group_name: str | None = None
     whatsapp_group_external_id: str | None = None
+    # Nom de l'agent enregistre (Agents), plus fiable que sender_name : le
+    # nom WhatsApp brut est souvent indisponible (message.getContact()
+    # echoue frequemment cote passerelle — bug reel documente). Cle sur le
+    # numero de telephone (Agent.whatsapp_phone), pas sur le nom.
+    agent_full_name: str | None = None
 
     model_config = {"from_attributes": True}
 

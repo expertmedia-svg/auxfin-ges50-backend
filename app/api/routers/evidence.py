@@ -1,18 +1,22 @@
+import csv
+import io
 import logging
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from openpyxl import Workbook
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.audit import record_audit
 from app.core.database import get_db
 from app.core.deps import require_roles
 from app.core.permissions import READ_ROLES, WRITE_ROLES
+from app.models.applications import Agent
 from app.models.enums import EvidenceSource, ManualReviewDecision, ProcessingStatus
 from app.models.evidence import EvidenceExtraction, EvidenceFile, EvidenceFrame, OcrResult
 from app.models.identity import User
@@ -127,6 +131,17 @@ def _attach_whatsapp_origin(db: Session, items: list[EvidenceFile]) -> list[Evid
     relationship ORM dediee (WhatsAppMessage.evidence_id est deja la FK, pas
     la peine d'en ajouter une seconde dans l'autre sens) : une seule requete
     groupee pour toute la page, pas de N+1."""
+    # Toujours initialiser ces attributs (meme sans correspondance) : ce ne
+    # sont pas de vraies colonnes mappees, un acces direct e.whatsapp_group_name
+    # leverait AttributeError sur un objet jamais touche sinon — bug reel
+    # attrape par les tests de l'export CSV/XLSX (qui accedent directement
+    # aux attributs, contrairement aux reponses API ou pydantic masque
+    # l'absence via la valeur par defaut du schema).
+    for e in items:
+        e.whatsapp_group_name = None
+        e.whatsapp_group_external_id = None
+        e.agent_full_name = None
+
     ids = [e.id for e in items]
     if not ids:
         return items
@@ -145,6 +160,15 @@ def _attach_whatsapp_origin(db: Session, items: list[EvidenceFile]) -> list[Evid
         origin = origin_by_evidence.get(e.id)
         if origin:
             e.whatsapp_group_name, e.whatsapp_group_external_id = origin
+
+    agent_ids = {e.agent_id for e in items if e.agent_id}
+    if agent_ids:
+        agent_names = dict(
+            db.query(Agent.id, Agent.full_name).filter(Agent.id.in_(agent_ids)).all()
+        )
+        for e in items:
+            if e.agent_id:
+                e.agent_full_name = agent_names.get(e.agent_id)
     return items
 
 
@@ -170,6 +194,91 @@ def list_evidence(
         query = query.filter(EvidenceFile.processing_status == ProcessingStatus.REQUIRES_REVIEW)
     items = query.order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all()
     return _attach_whatsapp_origin(db, items)
+
+
+_ID_EXPORT_HEADERS = [
+    "ID detecte", "Application", "Groupe WhatsApp", "Contact", "Telephone",
+    "Date detectee", "Statut sync", "Recu le",
+]
+
+
+def _id_export_rows(db: Session, application_id: str | None, start: datetime | None, end: datetime | None) -> list[EvidenceFile]:
+    query = (
+        db.query(EvidenceFile)
+        .join(EvidenceExtraction, EvidenceExtraction.evidence_id == EvidenceFile.id)
+        .options(joinedload(EvidenceFile.extraction), joinedload(EvidenceFile.application))
+        .filter(EvidenceExtraction.normalized_group_id.isnot(None))
+    )
+    if application_id:
+        query = query.filter(EvidenceFile.application_id == application_id)
+    if start is not None:
+        query = query.filter(EvidenceFile.received_at >= start)
+    if end is not None:
+        query = query.filter(EvidenceFile.received_at < end)
+    items = query.order_by(EvidenceFile.received_at.desc()).limit(2000).all()
+    return _attach_whatsapp_origin(db, items)
+
+
+def _id_export_row_values(e: EvidenceFile) -> list:
+    ex = e.extraction
+    return [
+        (ex.manually_corrected_group_id or ex.normalized_group_id) if ex else None,
+        e.application.name if e.application else None,
+        e.whatsapp_group_name,
+        e.agent_full_name or e.sender_name,
+        e.sender_phone,
+        (ex.manually_corrected_date or ex.normalized_date) if ex else None,
+        ex.sync_status.value if ex and hasattr(ex.sync_status, "value") else (ex.sync_status if ex else None),
+        e.received_at.strftime("%Y-%m-%d %H:%M") if e.received_at else None,
+    ]
+
+
+@router.get("/export-ids")
+def export_detected_ids(
+    application_id: str | None = None,
+    period_start: str | None = Query(default=None, description="YYYY-MM-DD, inclus"),
+    period_end: str | None = Query(default=None, description="YYYY-MM-DD, inclus"),
+    format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(*READ_ROLES)),
+) -> Response:
+    start = (
+        datetime.combine(date.fromisoformat(period_start), datetime.min.time(), tzinfo=UTC)
+        if period_start else None
+    )
+    end = (
+        datetime.combine(date.fromisoformat(period_end), datetime.min.time(), tzinfo=UTC) + timedelta(days=1)
+        if period_end else None
+    )
+    items = _id_export_rows(db, application_id, start, end)
+
+    if format == "xlsx":
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "IDs detectes"
+        ws.append(_ID_EXPORT_HEADERS)
+        for e in items:
+            ws.append(_id_export_row_values(e))
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        content = buffer.getvalue()
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        filename = "ids_detectes.xlsx"
+    else:
+        buffer_str = io.StringIO()
+        writer = csv.writer(buffer_str)
+        writer.writerow(_ID_EXPORT_HEADERS)
+        for e in items:
+            writer.writerow(["" if v is None else v for v in _id_export_row_values(e)])
+        content = buffer_str.getvalue().encode("utf-8-sig")  # BOM : accents corrects a l'ouverture Excel
+        media_type = "text/csv"
+        filename = "ids_detectes.csv"
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/{evidence_id}", response_model=EvidenceOut)

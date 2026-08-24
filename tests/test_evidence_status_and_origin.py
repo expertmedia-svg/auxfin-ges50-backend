@@ -6,7 +6,7 @@ de l'API evidence."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +15,7 @@ from app.core.database import get_db
 from app.core.permissions import RoleCode
 from app.core.security import hash_password
 from app.main import app
-from app.models.evidence import EvidenceFile
+from app.models.evidence import EvidenceExtraction, EvidenceFile
 from app.models.identity import Role, User, UserRole
 from app.models.whatsapp import WhatsAppGroup, WhatsAppMessage
 
@@ -56,14 +56,17 @@ def auth_token(db_session, client):
 def _make_evidence(db_session, **overrides) -> EvidenceFile:
     evidence = EvidenceFile(
         original_filename=overrides.get("original_filename", "test.mp4"),
-        stored_filename="stored-test.mp4",
+        stored_filename=overrides.get("stored_filename", "stored-test.mp4"),
         mime_type="video/mp4",
         media_type="video",
         file_size=1234,
-        sha256="a" * 64,
+        sha256=overrides.get("sha256", "a" * 64),
         source="whatsapp_gateway",
         storage_path="uploads/test.mp4",
         processing_status=overrides.get("processing_status", "PENDING"),
+        sender_name=overrides.get("sender_name"),
+        sender_phone=overrides.get("sender_phone"),
+        received_at=overrides.get("received_at", datetime.now(UTC)),
     )
     db_session.add(evidence)
     db_session.commit()
@@ -134,3 +137,88 @@ def test_evidence_without_whatsapp_message_has_null_origin(client, db_session, a
     resp = client.get(f"/api/evidence/{evidence.id}", headers={"Authorization": f"Bearer {auth_token}"})
     assert resp.status_code == 200
     assert resp.json()["whatsapp_group_name"] is None
+
+
+def test_evidence_exposes_sender_phone(client, db_session, auth_token):
+    evidence = _make_evidence(db_session, sender_phone="22670000000", sender_name="Amidou K.")
+    resp = client.get(f"/api/evidence/{evidence.id}", headers={"Authorization": f"Bearer {auth_token}"})
+    assert resp.status_code == 200
+    assert resp.json()["sender_phone"] == "22670000000"
+    assert resp.json()["sender_name"] == "Amidou K."
+
+
+def test_export_ids_csv_contains_detected_id_and_contact(client, db_session, auth_token):
+    evidence = _make_evidence(
+        db_session,
+        original_filename="today.mp4",
+        sha256="b" * 64,
+        stored_filename="stored-today.mp4",
+        sender_phone="22670000001",
+        sender_name="Fatou D.",
+        received_at=datetime.now(UTC),
+    )
+    db_session.add(EvidenceExtraction(evidence_id=evidence.id, normalized_group_id="gr1.test-groupe"))
+    db_session.commit()
+
+    resp = client.get(
+        "/api/evidence/export-ids",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"format": "csv"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/csv")
+    body = resp.content.decode("utf-8-sig")
+    assert "gr1.test-groupe" in body
+    assert "22670000001" in body
+    assert "Fatou D." in body
+
+
+def test_export_ids_excludes_evidence_without_detected_id(client, db_session, auth_token):
+    _make_evidence(db_session, original_filename="no-id.mp4", sha256="c" * 64, stored_filename="stored-no-id.mp4")
+    resp = client.get(
+        "/api/evidence/export-ids",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"format": "csv"},
+    )
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "no-id.mp4" not in body  # aucune extraction -> pas d'ID -> exclu
+
+
+def test_export_ids_respects_period_filter(client, db_session, auth_token):
+    old_evidence = _make_evidence(
+        db_session,
+        original_filename="old.mp4",
+        sha256="d" * 64,
+        stored_filename="stored-old.mp4",
+        received_at=datetime.now(UTC) - timedelta(days=30),
+    )
+    db_session.add(EvidenceExtraction(evidence_id=old_evidence.id, normalized_group_id="gr2.hors-periode"))
+    db_session.commit()
+
+    today = date.today().isoformat()
+    resp = client.get(
+        "/api/evidence/export-ids",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"format": "csv", "period_start": today, "period_end": today},
+    )
+    assert resp.status_code == 200
+    body = resp.content.decode("utf-8-sig")
+    assert "gr2.hors-periode" not in body
+
+
+def test_export_ids_xlsx_format(client, db_session, auth_token):
+    evidence = _make_evidence(
+        db_session, original_filename="xlsx.mp4", sha256="e" * 64, stored_filename="stored-xlsx.mp4"
+    )
+    db_session.add(EvidenceExtraction(evidence_id=evidence.id, normalized_group_id="gr3.excel-test"))
+    db_session.commit()
+
+    resp = client.get(
+        "/api/evidence/export-ids",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"format": "xlsx"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert len(resp.content) > 0
