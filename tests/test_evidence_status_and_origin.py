@@ -160,6 +160,8 @@ def test_export_ids_csv_contains_detected_id_and_contact(client, db_session, aut
     db_session.add(EvidenceExtraction(evidence_id=evidence.id, normalized_group_id="gr1.test-groupe"))
     db_session.commit()
 
+    # Par defaut (detailed non fourni) : uniquement la colonne ID, tel que
+    # demande explicitement par l'utilisateur ("juste la zone ID detecte").
     resp = client.get(
         "/api/evidence/export-ids",
         headers={"Authorization": f"Bearer {auth_token}"},
@@ -169,8 +171,21 @@ def test_export_ids_csv_contains_detected_id_and_contact(client, db_session, aut
     assert resp.headers["content-type"].startswith("text/csv")
     body = resp.content.decode("utf-8-sig")
     assert "gr1.test-groupe" in body
-    assert "22670000001" in body
-    assert "Fatou D." in body
+    assert "22670000001" not in body
+    assert "Fatou D." not in body
+
+    # detailed=true : l'export complet (contact/telephone inclus) reste
+    # disponible pour qui en a besoin.
+    detailed_resp = client.get(
+        "/api/evidence/export-ids",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"format": "csv", "detailed": "true"},
+    )
+    assert detailed_resp.status_code == 200
+    detailed_body = detailed_resp.content.decode("utf-8-sig")
+    assert "gr1.test-groupe" in detailed_body
+    assert "22670000001" in detailed_body
+    assert "Fatou D." in detailed_body
 
 
 def test_export_ids_excludes_evidence_without_detected_id(client, db_session, auth_token):

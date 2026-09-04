@@ -239,6 +239,11 @@ def export_detected_ids(
     period_start: str | None = Query(default=None, description="YYYY-MM-DD, inclus"),
     period_end: str | None = Query(default=None, description="YYYY-MM-DD, inclus"),
     format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
+    # Par defaut : uniquement la colonne ID (dedoublonnee, triee) — c'est ce
+    # qui a ete demande explicitement ("juste la zone ID detecte"), pas le
+    # detail application/contact/date. detailed=true garde l'export complet
+    # pour qui en a besoin, sans rien retirer.
+    detailed: bool = False,
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(*READ_ROLES)),
 ) -> Response:
@@ -252,13 +257,21 @@ def export_detected_ids(
     )
     items = _id_export_rows(db, application_id, start, end)
 
+    if detailed:
+        headers = _ID_EXPORT_HEADERS
+        rows = [_id_export_row_values(e) for e in items]
+    else:
+        headers = ["ID detecte"]
+        unique_ids = sorted({v[0] for e in items if (v := _id_export_row_values(e))[0]})
+        rows = [[i] for i in unique_ids]
+
     if format == "xlsx":
         wb = Workbook()
         ws = wb.active
         ws.title = "IDs detectes"
-        ws.append(_ID_EXPORT_HEADERS)
-        for e in items:
-            ws.append(_id_export_row_values(e))
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
         buffer = io.BytesIO()
         wb.save(buffer)
         content = buffer.getvalue()
@@ -267,9 +280,9 @@ def export_detected_ids(
     else:
         buffer_str = io.StringIO()
         writer = csv.writer(buffer_str)
-        writer.writerow(_ID_EXPORT_HEADERS)
-        for e in items:
-            writer.writerow(["" if v is None else v for v in _id_export_row_values(e)])
+        writer.writerow(headers)
+        for row in rows:
+            writer.writerow(["" if v is None else v for v in row])
         content = buffer_str.getvalue().encode("utf-8-sig")  # BOM : accents corrects a l'ouverture Excel
         media_type = "text/csv"
         filename = "ids_detectes.csv"
