@@ -237,3 +237,48 @@ def test_export_ids_xlsx_format(client, db_session, auth_token):
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     assert len(resp.content) > 0
+
+
+def test_reject_removes_evidence_from_manual_review_queue(client, db_session, auth_token):
+    """Bug reel : reject_evidence() ne mettait jamais a jour processing_status,
+    donc une preuve rejetee restait indefiniment dans la file de controle
+    manuel (le bouton 'Rejeter' semblait ne rien faire cote utilisateur)."""
+    evidence = _make_evidence(db_session, processing_status="REQUIRES_REVIEW")
+
+    resp = client.post(
+        f"/api/evidence/{evidence.id}/reject",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        json={"comment": "Pas une preuve valide"},
+    )
+    assert resp.status_code == 204
+
+    db_session.refresh(evidence)
+    assert evidence.processing_status == "FAILED"
+
+    queue = client.get(
+        "/api/evidence",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"requires_review": True},
+    )
+    assert evidence.id not in [e["id"] for e in queue.json()]
+
+
+def test_validate_removes_evidence_from_manual_review_queue(client, db_session, auth_token):
+    evidence = _make_evidence(db_session, processing_status="REQUIRES_REVIEW")
+
+    resp = client.post(
+        f"/api/evidence/{evidence.id}/validate",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        json={"comment": None},
+    )
+    assert resp.status_code == 204
+
+    db_session.refresh(evidence)
+    assert evidence.processing_status == "COMPLETED"
+
+    queue = client.get(
+        "/api/evidence",
+        headers={"Authorization": f"Bearer {auth_token}"},
+        params={"requires_review": True},
+    )
+    assert evidence.id not in [e["id"] for e in queue.json()]

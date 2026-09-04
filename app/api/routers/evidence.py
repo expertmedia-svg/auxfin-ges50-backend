@@ -503,6 +503,12 @@ def reject_evidence(
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ) -> None:
     _resolve_manual_review(db, evidence_id, user, ManualReviewDecision.REJECTED, payload.comment)
+    # Bug reel : sans cette ligne, processing_status restait REQUIRES_REVIEW
+    # apres rejet, donc la preuve rejetee ne quittait jamais la file de
+    # controle manuel (le bouton "Rejeter" semblait ne rien faire).
+    evidence = db.get(EvidenceFile, evidence_id)
+    if evidence:
+        evidence.processing_status = ProcessingStatus.FAILED
     db.commit()
 
 
