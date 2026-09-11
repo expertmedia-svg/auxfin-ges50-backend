@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -45,6 +45,7 @@ def create_and_run(
 
 @router.get("/results", response_model=list[ReconciliationResultOut])
 def get_results(
+    response: Response,
     run_id: str,
     status_filter: str | None = Query(default=None, alias="status"),
     application_id: str | None = None,
@@ -70,6 +71,9 @@ def get_results(
             (ReconciliationResult.whatsapp_group_id == group_id)
             | (ReconciliationResult.dashboard_group_id == group_id)
         )
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
     return query.offset(offset).limit(limit).all()
 
 

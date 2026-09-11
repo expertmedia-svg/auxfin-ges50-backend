@@ -174,6 +174,7 @@ def _attach_whatsapp_origin(db: Session, items: list[EvidenceFile]) -> list[Evid
 
 @router.get("", response_model=list[EvidenceOut])
 def list_evidence(
+    response: Response,
     application_id: str | None = None,
     processing_status: str | None = None,
     media_type: str | None = None,
@@ -183,7 +184,7 @@ def list_evidence(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(*READ_ROLES)),
 ) -> list[EvidenceFile]:
-    query = db.query(EvidenceFile).options(joinedload(EvidenceFile.extraction))
+    query = db.query(EvidenceFile)
     if application_id:
         query = query.filter(EvidenceFile.application_id == application_id)
     if processing_status:
@@ -192,7 +193,10 @@ def list_evidence(
         query = query.filter(EvidenceFile.media_type == media_type)
     if requires_review:
         query = query.filter(EvidenceFile.processing_status == ProcessingStatus.REQUIRES_REVIEW)
-    items = query.order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all()
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+    items = query.options(joinedload(EvidenceFile.extraction)).order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all()
     return _attach_whatsapp_origin(db, items)
 
 
@@ -215,7 +219,7 @@ def _id_export_rows(db: Session, application_id: str | None, start: datetime | N
         query = query.filter(EvidenceFile.received_at >= start)
     if end is not None:
         query = query.filter(EvidenceFile.received_at < end)
-    items = query.order_by(EvidenceFile.received_at.desc()).limit(2000).all()
+    items = query.order_by(EvidenceFile.received_at.desc()).all()
     return _attach_whatsapp_origin(db, items)
 
 

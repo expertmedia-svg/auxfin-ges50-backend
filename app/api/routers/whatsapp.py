@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -201,6 +201,7 @@ def update_group(
 
 @router.get("/messages", response_model=list[WhatsAppMessageOut])
 def list_messages(
+    response: Response,
     group_id: str | None = None,
     download_status: str | None = None,
     limit: int = Query(default=100, le=500),
@@ -213,6 +214,9 @@ def list_messages(
         query = query.filter(WhatsAppMessage.group_id == group_id)
     if download_status:
         query = query.filter(WhatsAppMessage.download_status == download_status)
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
     return query.order_by(WhatsAppMessage.created_at.desc()).offset(offset).limit(limit).all()
 
 

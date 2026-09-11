@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -13,8 +13,10 @@ router = APIRouter(prefix="/audit-logs", tags=["audit"])
 
 @router.get("", response_model=list[AuditLogOut])
 def list_audit_logs(
+    response: Response,
     action: str | None = None,
     limit: int = Query(default=100, le=1000),
+    offset: int = 0,
     db: Session = Depends(get_db),
     _: User = Depends(
         require_roles(
@@ -25,4 +27,7 @@ def list_audit_logs(
     query = db.query(AuditLog)
     if action:
         query = query.filter(AuditLog.action == action)
-    return query.order_by(AuditLog.created_at.desc()).limit(limit).all()
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+    return query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit).all()
