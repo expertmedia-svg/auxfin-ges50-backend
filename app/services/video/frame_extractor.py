@@ -15,6 +15,28 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
+def extract_timeline_frames(video_path: str, output_dir: str, evidence_id: str,
+                            metadata: VideoMetadata, existing: list[ExtractedFrame],
+                            max_frames: int = 16) -> list[ExtractedFrame]:
+    """Échantillonnage complémentaire réparti sur la vidéo, sans redécoder tout le flux."""
+    if max_frames < 1:
+        return []
+    duration = metadata.duration_seconds
+    covered = [duration - f.offset_seconds if f.position == "end" else f.offset_seconds for f in existing]
+    result = []
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    for i in range(1, max_frames + 1):
+        timestamp = duration * i / (max_frames + 1)
+        if any(abs(timestamp - previous) < 0.25 for previous in covered):
+            continue
+        path = str(output / f"{evidence_id}_middle_{timestamp:.3f}.jpg")
+        if _extract_single_frame(video_path, timestamp, path):
+            result.append(ExtractedFrame("middle", timestamp, path))
+            covered.append(timestamp)
+    return result
+
+
 class VideoProbeError(Exception):
     pass
 

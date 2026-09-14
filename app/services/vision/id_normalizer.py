@@ -60,6 +60,8 @@ def find_id_candidates(text: str) -> list[str]:
     """Recherche, dans un texte OCR complet (potentiellement multi-lignes), les
     segments ressemblant a un identifiant de groupe G50, sans se limiter a une
     seule regex rigide sur la totalite de la chaine."""
+    # Le jour d'une date voisine ne fait pas partie du nom du groupe.
+    text = re.sub(r"(?<!\S)(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})(?=\s|$)", "\n", text)
     candidates = []
     for match in _ID_CANDIDATE_RE.finditer(text):
         token = match.group(0).strip()

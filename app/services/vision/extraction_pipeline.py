@@ -11,7 +11,7 @@ from datetime import date
 
 from app.core.config import get_settings
 from app.models.enums import SyncStatus
-from app.services.video.frame_extractor import ExtractedFrame, VideoMetadata, extract_start_end_frames
+from app.services.video.frame_extractor import ExtractedFrame, VideoMetadata, extract_start_end_frames, extract_timeline_frames
 from app.services.vision.date_parser import parse_date
 from app.services.vision.id_normalizer import find_id_candidates, normalize_group_id
 from app.services.vision.ocr_engine import best_result, combined_text, run_ocr_on_image_path
@@ -109,6 +109,7 @@ def extract_from_image(
     known_ids: list[str] | None = None,
     context_date: date | None = None,
     status_icon_zone: dict | None = None,
+    application_code: str | None = None,
 ) -> ExtractionOutcome:
     ocr_results = run_ocr_on_image_path(image_path)
     text = combined_text(ocr_results)
@@ -129,6 +130,8 @@ def extract_from_image(
                                          "+".join(sorted({r.engine for r in ocr_results})))]
     if status_icon_zone:
         apply_icon_confirmation(outcome, image_path, status_icon_zone)
+    if application_code == "agricoach":
+        evaluate_sync_frames(outcome, success_keywords, error_keywords, application_code=application_code)
     return outcome
 
 
@@ -166,12 +169,26 @@ def refresh_sync_review(outcome: ExtractionOutcome) -> None:
 
 
 def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str],
-                         error_keywords: list[str], icon_zone: dict | None = None) -> None:
+                         error_keywords: list[str], icon_zone: dict | None = None,
+                         application_code: str | None = None) -> None:
     """Dernier état explicite, dans l'ordre temporel, sans utiliser le début de vidéo."""
     latest = (SyncStatus.UNCONFIRMED, None, 0.0)
-    for frame in sorted((f for f in outcome.frame_debug if f.position == "end"),
-                        key=lambda f: f.offset_seconds, reverse=True):
+    duration = outcome.video_metadata.duration_seconds if outcome.video_metadata else 0
+    for frame in sorted((f for f in outcome.frame_debug if f.position in ("middle", "end")),
+                        key=lambda f: duration - f.offset_seconds if f.position == "end" else f.offset_seconds):
         result = detect_sync_status(frame.raw_text, success_keywords, error_keywords)
+        if application_code == "agricoach" and result.status != SyncStatus.FAILED:
+            from app.services.vision.agricoach_status import detect_agricoach_status
+            checks = detect_agricoach_status(frame.path, frame.raw_text)
+            if checks.confirmed:
+                latest = (SyncStatus.SUCCESS, "AgriCoach : upload_data et download_data coches sur le meme ecran", .95)
+                continue
+            if checks.panel_visible:
+                latest = (SyncStatus.UNCONFIRMED, "AgriCoach : les deux coches requises ne sont pas confirmees", 0.0)
+                continue
+            if result.status == SyncStatus.SUCCESS:
+                # Pour AgriCoach, un mot isolé ne remplace pas les deux coches.
+                continue
         if result.matched_keyword:
             latest = (result.status, result.matched_keyword, result.confidence)
         elif icon_zone:
@@ -194,6 +211,7 @@ def extract_from_video(
     start_offsets: list[float] | None = None,
     end_offsets: list[float] | None = None,
     status_icon_zone: dict | None = None,
+    application_code: str | None = None,
 ) -> ExtractionOutcome:
     metadata, frames = extract_start_end_frames(
         video_path, frames_output_dir, evidence_id, start_offsets, end_offsets
@@ -280,7 +298,28 @@ def extract_from_video(
     outcome.frame_debug = frame_debug
     outcome.video_metadata = metadata
 
-    evaluate_sync_frames(outcome, success_keywords, error_keywords, status_icon_zone)
+    evaluate_sync_frames(outcome, success_keywords, error_keywords, status_icon_zone, application_code)
+    if outcome.sync_status == SyncStatus.UNCONFIRMED or not outcome.normalized_group_id or not outcome.normalized_date:
+        extra_frames = extract_timeline_frames(video_path, frames_output_dir, evidence_id, metadata, frames)
+        for frame in extra_frames:
+            results = run_ocr_on_image_path(frame.path)
+            best = best_result(results)
+            frame_debug.append(FrameOcrDebug(
+                frame.position, frame.offset_seconds, frame.path, combined_text(results),
+                best.confidence if best else 0.0, "+".join(sorted({r.engine for r in results})),
+            ))
+        if extra_frames:
+            combined = "\n".join(f.raw_text for f in frame_debug)
+            outcome = _build_outcome(
+                combined_ocr_text=combined, start_text=start_text, end_text=combined,
+                base_ocr_confidence=sum(f.confidence for f in frame_debug) / len(frame_debug),
+                success_keywords=success_keywords, error_keywords=error_keywords,
+                known_ids=known_ids, context_date=context_date,
+            )
+            outcome.extracted_frames = [*frames, *extra_frames]
+            outcome.frame_debug = frame_debug
+            outcome.video_metadata = metadata
+            evaluate_sync_frames(outcome, success_keywords, error_keywords, status_icon_zone, application_code)
     if outcome.normalized_group_id is None:
         outcome.review_reasons.append(
             "Aucun identifiant fiable trouve dans les frames de debut analysees"

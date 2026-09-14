@@ -159,7 +159,7 @@ def _run_pipeline(db: Session, evidence: EvidenceFile) -> tuple[ExtractionOutcom
         # Rafine le statut de synchronisation avec les mots-cles specifiques de
         # l'application detectee, sans nouvelle extraction video/OCR.
         evaluate_sync_frames(outcome, matched_profile.success_keywords, matched_profile.error_keywords,
-                             (matched_profile.screen_zones or {}).get("sync_status_icon"))
+                             (matched_profile.screen_zones or {}).get("sync_status_icon"), matched_profile.application.code)
 
         return outcome, matched_profile.application
 
@@ -191,6 +191,7 @@ def _extract(evidence, resolved_path, profile: ApplicationProfile, known_ids, co
             start_offsets=profile.video_start_offsets_seconds,
             end_offsets=profile.video_end_offsets_seconds,
             status_icon_zone=(profile.screen_zones or {}).get("sync_status_icon"),
+            application_code=profile.application.code,
         )
     return extract_from_image(
         resolved_path,
@@ -199,6 +200,7 @@ def _extract(evidence, resolved_path, profile: ApplicationProfile, known_ids, co
         known_ids=known_ids,
         context_date=context_date_only,
         status_icon_zone=(profile.screen_zones or {}).get("sync_status_icon"),
+        application_code=profile.application.code,
     )
 
 
