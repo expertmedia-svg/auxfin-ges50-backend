@@ -10,6 +10,7 @@ n'est present.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 
@@ -23,7 +24,7 @@ MATCH_THRESHOLD = 85
 # "synchroniser", bouton omnipresent) : on exige une correspondance quasi
 # exacte pour eux, faute de quoi une simple faute d'OCR sur un mot voisin
 # suffirait a declencher un faux SUCCESS/FAILED.
-SHORT_KEYWORD_MATCH_THRESHOLD = 95
+SHORT_KEYWORD_MATCH_THRESHOLD = 100
 SHORT_KEYWORD_MAX_LENGTH = 14
 
 
@@ -67,7 +68,7 @@ def _best_keyword_match(folded_text: str, keywords: list[str]) -> tuple[str | No
         folded_keyword = _fold(keyword)
         if not folded_keyword:
             continue
-        if folded_keyword in folded_text:
+        if re.search(r"(?<!\w)" + re.escape(folded_keyword) + r"(?!\w)", folded_text):
             score = 100.0
         else:
             keyword_word_count = max(len(folded_keyword.split()), 1)
@@ -96,6 +97,10 @@ def detect_sync_status(
 
     folded_text = _fold(text)
 
+    # Une négation ou une opération encore en cours n'est jamais un succès.
+    if re.search(r"\b(non synchronis\w*|pas synchronis\w*|not sync\w*|unsynced|not completed|non termine\w*)\b", folded_text):
+        return SyncStatusResult(SyncStatus.FAILED, "Donnees non synchronisees", 1.0)
+
     # _best_keyword_match ne retourne un mot-cle que s'il a deja franchi son
     # propre seuil requis (standard ou renforce pour les mots courts isoles).
     error_keyword, error_score = _best_keyword_match(folded_text, error_keywords)
@@ -103,6 +108,9 @@ def detect_sync_status(
         return SyncStatusResult(
             status=SyncStatus.FAILED, matched_keyword=error_keyword, confidence=error_score / 100
         )
+
+    if re.search(r"\b(en cours|en attente|in progress|pending)\b", folded_text):
+        return SyncStatusResult(SyncStatus.UNCONFIRMED, "Synchronisation en cours ou en attente", 0.0)
 
     success_keyword, success_score = _best_keyword_match(folded_text, success_keywords)
     if success_keyword:

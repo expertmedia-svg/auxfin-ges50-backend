@@ -10,6 +10,7 @@ from app.api.routers import (
     auth,
     dashboard_imports,
     evidence,
+    followups,
     reconciliation,
     reports,
     statistics,
@@ -46,6 +47,7 @@ app.include_router(agents.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(settings_router.router, prefix="/api")
 app.include_router(evidence.router, prefix="/api")
+app.include_router(followups.router, prefix="/api")
 app.include_router(dashboard_imports.router, prefix="/api")
 app.include_router(reconciliation.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")

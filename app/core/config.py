@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     allowed_export_extensions: set[str] = {".xlsx", ".xls", ".csv"}
 
     ocr_confidence_threshold: float = 0.55
+    groq_vision_enabled: bool = False
+    groq_api_key: str | None = None
+    groq_vision_model: str = "qwen/qwen3.6-27b"
     fuzzy_match_threshold: int = 88
     reconciliation_date_tolerance_days: int = 0
 

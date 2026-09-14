@@ -175,6 +175,7 @@ def _attach_whatsapp_origin(db: Session, items: list[EvidenceFile]) -> list[Evid
 @router.get("", response_model=list[EvidenceOut])
 def list_evidence(
     response: Response,
+    evidence_id: str | None = None,
     application_id: str | None = None,
     processing_status: str | None = None,
     media_type: str | None = None,
@@ -185,6 +186,8 @@ def list_evidence(
     _: User = Depends(require_roles(*READ_ROLES)),
 ) -> list[EvidenceFile]:
     query = db.query(EvidenceFile)
+    if evidence_id:
+        query = query.filter(EvidenceFile.id == evidence_id)
     if application_id:
         query = query.filter(EvidenceFile.application_id == application_id)
     if processing_status:
@@ -414,6 +417,7 @@ def correct_evidence(
         extraction.manually_corrected_group_id = payload.group_id
     if payload.sync_date is not None:
         extraction.manually_corrected_date = payload.sync_date
+        extraction.date_is_ambiguous = False
     extraction.manually_corrected_by_id = user.id
     extraction.manually_corrected_at = datetime.now(UTC)
 
@@ -496,6 +500,10 @@ def validate_evidence(
     evidence = db.get(EvidenceFile, evidence_id)
     if evidence:
         evidence.processing_status = ProcessingStatus.COMPLETED
+        if evidence.extraction:
+            evidence.extraction.requires_manual_review = False
+        from app.services.followups import update_followups
+        update_followups(db, evidence)
     db.commit()
 
 

@@ -126,6 +126,15 @@ def run_ocr_on_image_path(image_path: str) -> list[OcrEngineResult]:
             results.append(tess_result)
 
     results.sort(key=lambda r: r.confidence, reverse=True)
+    from app.core.config import get_settings
+    from app.services.vision.groq_vision import transcribe
+
+    best = best_result(results)
+    if best is None or best.confidence < get_settings().ocr_confidence_threshold:
+        text = transcribe(image_path)
+        if text:
+            # Aucun score auto-déclaré par l'IA n'autorise une validation.
+            results.insert(0, OcrEngineResult("groq", "vision_assistance", text, 0.0))
     return results
 
 

@@ -21,11 +21,10 @@ from app.models.reconciliation import ManualReview
 from app.services.vision.application_detector import detect_application
 from app.services.vision.extraction_pipeline import (
     ExtractionOutcome,
+    evaluate_sync_frames,
     extract_from_image,
     extract_from_video,
 )
-from app.services.vision.status_icon import detect_status_icon_color
-from app.services.vision.sync_status import detect_sync_status
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -87,6 +86,9 @@ def process_evidence(db: Session, evidence_id: str) -> EvidenceFile:
 
     try:
         outcome, resolved_app = _run_pipeline(db, evidence)
+        if any("groq" in frame.engine for frame in outcome.frame_debug):
+            outcome.review_reasons.append("Transcription assistée par Groq : vérifier les données sur la preuve originale")
+            outcome.requires_manual_review = True
         _persist_outcome(db, evidence, outcome, resolved_app)
 
         evidence.processing_status = (
@@ -111,6 +113,8 @@ def process_evidence(db: Session, evidence_id: str) -> EvidenceFile:
             job.finished_at = datetime.now(UTC)
             job.duration_ms = int((time.monotonic() - started_at) * 1000)
 
+    from app.services.followups import update_followups
+    update_followups(db, evidence)
     db.commit()
     db.refresh(evidence)
     return evidence
@@ -154,42 +158,15 @@ def _run_pipeline(db: Session, evidence: EvidenceFile) -> tuple[ExtractionOutcom
         matched_profile = next(p for p in all_profiles if p.application_id == detection.application_id)
         # Rafine le statut de synchronisation avec les mots-cles specifiques de
         # l'application detectee, sans nouvelle extraction video/OCR.
-        end_text_source = outcome.raw_ocr_text
-        status_result = detect_sync_status(
-            end_text_source, matched_profile.success_keywords, matched_profile.error_keywords
-        )
-        outcome.sync_status = status_result.status
-        outcome.sync_status_evidence_text = status_result.matched_keyword
-        outcome.confidence_sync = status_result.confidence
-
-        # Meme logique qu'en mode application fixee (extraction_pipeline.py) :
-        # certaines applications (ex. YEBCoach) ne confirment la synchronisation
-        # que par une icone coloree, jamais par un mot-cle textuel. Reutilise les
-        # frames de fin deja extraites — pas de nouveau decodage video.
-        icon_zone = (matched_profile.screen_zones or {}).get("sync_status_icon")
-        if icon_zone and outcome.sync_status == SyncStatus.UNCONFIRMED:
-            for frame in outcome.extracted_frames:
-                if frame.position != "end":
-                    continue
-                icon_result = detect_status_icon_color(frame.path, icon_zone)
-                if icon_result.is_green:
-                    outcome.sync_status = SyncStatus.SUCCESS
-                    outcome.sync_status_evidence_text = (
-                        f"Icone d'etat verte detectee dans la zone calibree "
-                        f"({icon_result.green_ratio:.0%} de pixels verts)"
-                    )
-                    outcome.confidence_sync = min(0.5 + icon_result.green_ratio, 0.95)
-                    outcome.review_reasons = [
-                        reason for reason in outcome.review_reasons if "synchronisation" not in reason.lower()
-                    ]
-                    outcome.requires_manual_review = (
-                        outcome.normalized_group_id is None or outcome.normalized_date is None
-                    )
-                    break
+        evaluate_sync_frames(outcome, matched_profile.success_keywords, matched_profile.error_keywords,
+                             (matched_profile.screen_zones or {}).get("sync_status_icon"))
 
         return outcome, matched_profile.application
 
     outcome.requires_manual_review = True
+    outcome.sync_status = SyncStatus.UNCONFIRMED
+    outcome.confidence_sync = 0.0
+    outcome.sync_status_evidence_text = None
     outcome.review_reasons.append("Application non identifiee automatiquement")
     return outcome, None
 
@@ -221,6 +198,7 @@ def _extract(evidence, resolved_path, profile: ApplicationProfile, known_ids, co
         profile.error_keywords or DEFAULT_ERROR_KEYWORDS,
         known_ids=known_ids,
         context_date=context_date_only,
+        status_icon_zone=(profile.screen_zones or {}).get("sync_status_icon"),
     )
 
 
@@ -260,7 +238,7 @@ def _persist_outcome(
         db.add(
             OcrResult(
                 evidence_id=evidence.id,
-                engine="easyocr+tesseract",
+                engine=frame_debug.engine[:30],
                 raw_text=frame_debug.raw_text,
                 normalized_text=frame_debug.raw_text.lower(),
                 confidence=frame_debug.confidence,
@@ -296,3 +274,5 @@ def _persist_outcome(
         )
         if existing_review is None:
             db.add(ManualReview(evidence_id=evidence.id, reason=reason))
+        else:
+            existing_review.reason = reason

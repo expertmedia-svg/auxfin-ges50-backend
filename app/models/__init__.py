@@ -7,12 +7,15 @@ from app.models.evidence import (
     OcrResult,
     ProcessingJob,
 )
+from app.models.followup import EvidenceFollowup, FollowupMessage
 from app.models.identity import Permission, Role, User, UserRole
 from app.models.reconciliation import ManualReview, ReconciliationResult, ReconciliationRun
 from app.models.system import AuditLog, Report, SystemSetting
 from app.models.whatsapp import WhatsAppGatewayStatus, WhatsAppGroup, WhatsAppMessage
 
 __all__ = [
+    "EvidenceFollowup",
+    "FollowupMessage",
     "Agent",
     "AgentGroupAssignment",
     "Application",

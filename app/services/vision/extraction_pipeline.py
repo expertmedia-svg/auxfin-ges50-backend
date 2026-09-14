@@ -9,12 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.core.config import get_settings
 from app.models.enums import SyncStatus
 from app.services.video.frame_extractor import ExtractedFrame, VideoMetadata, extract_start_end_frames
 from app.services.vision.date_parser import parse_date
 from app.services.vision.id_normalizer import find_id_candidates, normalize_group_id
 from app.services.vision.ocr_engine import best_result, combined_text, run_ocr_on_image_path
-from app.services.vision.status_icon import IconColorResult, detect_status_icon_color
+from app.services.vision.status_icon import detect_status_icon_color
 from app.services.vision.sync_status import detect_sync_status
 
 
@@ -25,6 +26,7 @@ class FrameOcrDebug:
     path: str
     raw_text: str
     confidence: float
+    engine: str = "easyocr+tesseract"
 
 
 @dataclass
@@ -106,13 +108,14 @@ def extract_from_image(
     error_keywords: list[str],
     known_ids: list[str] | None = None,
     context_date: date | None = None,
+    status_icon_zone: dict | None = None,
 ) -> ExtractionOutcome:
     ocr_results = run_ocr_on_image_path(image_path)
     text = combined_text(ocr_results)
     best = best_result(ocr_results)
     base_confidence = best.confidence if best else 0.0
 
-    return _build_outcome(
+    outcome = _build_outcome(
         combined_ocr_text=text,
         start_text=text,
         end_text=text,
@@ -122,6 +125,62 @@ def extract_from_image(
         known_ids=known_ids,
         context_date=context_date,
     )
+    outcome.frame_debug = [FrameOcrDebug("end", 0, image_path, text, base_confidence,
+                                         "+".join(sorted({r.engine for r in ocr_results})))]
+    if status_icon_zone:
+        apply_icon_confirmation(outcome, image_path, status_icon_zone)
+    return outcome
+
+
+def apply_icon_confirmation(outcome: ExtractionOutcome, path: str, zone: dict) -> None:
+    if outcome.sync_status != SyncStatus.UNCONFIRMED:
+        return
+    # Une opération explicitement en attente / en cours reste non confirmée.
+    if outcome.sync_status_evidence_text:
+        return
+    result = detect_status_icon_color(path, zone)
+    if result.is_green:
+        outcome.sync_status = SyncStatus.SUCCESS
+        outcome.sync_status_evidence_text = f"Icone verte dans la zone calibree ({result.green_ratio:.0%})"
+        outcome.confidence_sync = min(0.5 + result.green_ratio, 0.95)
+        outcome.review_reasons = [r for r in outcome.review_reasons if r != SYNC_REVIEW_REASON]
+        outcome.requires_manual_review = bool(outcome.review_reasons)
+        recompute_confidence(outcome)
+
+
+SYNC_REVIEW_REASON = "Statut de synchronisation non confirme par mot-cle de succes ou d'echec"
+
+
+def recompute_confidence(outcome: ExtractionOutcome) -> None:
+    ocr_confidence = max((f.confidence for f in outcome.frame_debug), default=0.0)
+    outcome.global_confidence = round((outcome.confidence_group_id + outcome.confidence_date
+                                       + outcome.confidence_sync + ocr_confidence) / 4, 3)
+
+
+def refresh_sync_review(outcome: ExtractionOutcome) -> None:
+    outcome.review_reasons = [r for r in outcome.review_reasons if r != SYNC_REVIEW_REASON]
+    if outcome.sync_status != SyncStatus.SUCCESS:
+        outcome.review_reasons.append(SYNC_REVIEW_REASON)
+    outcome.requires_manual_review = bool(outcome.review_reasons)
+    recompute_confidence(outcome)
+
+
+def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str],
+                         error_keywords: list[str], icon_zone: dict | None = None) -> None:
+    """Dernier état explicite, dans l'ordre temporel, sans utiliser le début de vidéo."""
+    latest = (SyncStatus.UNCONFIRMED, None, 0.0)
+    for frame in sorted((f for f in outcome.frame_debug if f.position == "end"),
+                        key=lambda f: f.offset_seconds, reverse=True):
+        result = detect_sync_status(frame.raw_text, success_keywords, error_keywords)
+        if result.matched_keyword:
+            latest = (result.status, result.matched_keyword, result.confidence)
+        elif icon_zone:
+            icon = detect_status_icon_color(frame.path, icon_zone)
+            if icon.is_green:
+                latest = (SyncStatus.SUCCESS, f"Icone verte dans la zone calibree ({icon.green_ratio:.0%})",
+                          min(0.5 + icon.green_ratio, 0.95))
+    outcome.sync_status, outcome.sync_status_evidence_text, outcome.confidence_sync = latest
+    refresh_sync_review(outcome)
 
 
 def extract_from_video(
@@ -146,7 +205,6 @@ def extract_from_video(
     start_text_parts: list[str] = []
     frame_debug: list[FrameOcrDebug] = []
     best_id_confidence = 0.0
-    id_found = False
 
     # On s'arrete des qu'un ID valide est trouve avec une confiance suffisante,
     # au lieu d'analyser systematiquement toutes les frames de debut.
@@ -162,11 +220,11 @@ def extract_from_video(
                 path=frame.path,
                 raw_text=text,
                 confidence=best.confidence if best else 0.0,
+                engine="+".join(sorted({r.engine for r in ocr_results})),
             )
         )
         _, candidate_norm, _, _, conf, _ = _resolve_id(text, known_ids)
         if candidate_norm:
-            id_found = True
             best_id_confidence = max(best_id_confidence, conf)
             if conf >= 0.9:
                 break
@@ -176,7 +234,6 @@ def extract_from_video(
     # (ex. YEBCoach, bug reel trouve en Phase C) ne confirment la
     # synchronisation que par une icone qui devient verte, sans jamais
     # afficher de texte de confirmation exploitable par l'OCR.
-    icon_confirmation: IconColorResult | None = None
     for frame in end_frames:
         ocr_results = run_ocr_on_image_path(frame.path)
         text = combined_text(ocr_results)
@@ -189,22 +246,17 @@ def extract_from_video(
                 path=frame.path,
                 raw_text=text,
                 confidence=best.confidence if best else 0.0,
+                engine="+".join(sorted({r.engine for r in ocr_results})),
             )
         )
-        status_result = detect_sync_status(text, success_keywords, error_keywords)
-        if status_icon_zone and icon_confirmation is None:
-            icon_result = detect_status_icon_color(frame.path, status_icon_zone)
-            if icon_result.is_green:
-                icon_confirmation = icon_result
-        sync_confirmed = status_result.status != SyncStatus.UNCONFIRMED or icon_confirmation is not None
         # Ne s'arrete tot que si l'ID est deja connu (trouve dans les frames de
         # debut) : sinon on continue de scanner les frames de fin restantes,
         # car certaines applications n'affichent l'ID que sur l'ecran final
         # (bug reel signale : ID jamais capte quand il n'apparait qu'en toute
         # fin de video, la confirmation de sync arrivant sur une frame plus
         # tot dans la boucle interrompait le scan avant d'y arriver).
-        if sync_confirmed and id_found:
-            break
+        # Analyser toutes les frames de fin : une erreur ultérieure doit
+        # primer sur une confirmation antérieure.
 
     start_text = "\n".join(start_text_parts)
     end_text = "\n".join(end_text_parts)
@@ -228,35 +280,8 @@ def extract_from_video(
     outcome.frame_debug = frame_debug
     outcome.video_metadata = metadata
 
-    # L'icone verte ne fait que CONFIRMER un succes quand aucun mot-cle
-    # textuel n'a rien trouve — elle ne remplace jamais un statut deja
-    # determine par texte (echec ou succes textuel restent prioritaires),
-    # et n'est jamais utilisee pour deduire un echec (trop peu fiable sur
-    # l'echantillon reel observe : un simple bouton rouge d'action, sans
-    # rapport avec un echec, peut aussi se trouver dans la zone calibree).
-    if icon_confirmation is not None and outcome.sync_status == SyncStatus.UNCONFIRMED:
-        outcome.sync_status = SyncStatus.SUCCESS
-        outcome.sync_status_evidence_text = (
-            f"Icone d'etat verte detectee dans la zone calibree "
-            f"({icon_confirmation.green_ratio:.0%} de pixels verts)"
-        )
-        outcome.confidence_sync = min(0.5 + icon_confirmation.green_ratio, 0.95)
-        outcome.review_reasons = [
-            reason for reason in outcome.review_reasons
-            if "synchronisation" not in reason.lower()
-        ]
-        outcome.requires_manual_review = (
-            outcome.normalized_group_id is None or outcome.normalized_date is None
-        )
-        # Recalcule la confiance globale (meme formule que _build_outcome)
-        # avec le confidence_sync mis a jour, pour rester cohérente.
-        updated_confidences = [
-            outcome.confidence_group_id, outcome.confidence_date, outcome.confidence_sync, avg_conf,
-        ]
-        outcome.global_confidence = round(
-            sum(c for c in updated_confidences if c) / max(len([c for c in updated_confidences if c]), 1), 3
-        )
-    if not id_found:
+    evaluate_sync_frames(outcome, success_keywords, error_keywords, status_icon_zone)
+    if outcome.normalized_group_id is None:
         outcome.review_reasons.append(
             "Aucun identifiant fiable trouve dans les frames de debut analysees"
         )
@@ -292,14 +317,15 @@ def _build_outcome(
     status_result = detect_sync_status(end_text, success_keywords, error_keywords)
 
     reasons = list(id_reasons) + list(date_reasons)
-    requires_review = normalized_id is None or date_result.normalized_date is None
+    if base_ocr_confidence < get_settings().ocr_confidence_threshold:
+        reasons.append("Image insuffisamment lisible : renvoyer une capture nette de l'ecran complet")
 
-    if status_result.status == SyncStatus.UNCONFIRMED:
-        reasons.append("Statut de synchronisation non confirme par mot-cle de succes ou d'echec")
-        requires_review = True
+    if status_result.status != SyncStatus.SUCCESS:
+        reasons.append(SYNC_REVIEW_REASON)
+    requires_review = bool(reasons)
 
     confidences = [id_confidence, date_result.confidence, status_result.confidence, base_ocr_confidence]
-    global_confidence = sum(c for c in confidences if c) / max(len([c for c in confidences if c]), 1)
+    global_confidence = sum(confidences) / len(confidences)
 
     return ExtractionOutcome(
         raw_group_id=raw_id,

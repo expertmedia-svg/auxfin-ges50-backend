@@ -22,6 +22,20 @@ def _client() -> httpx.Client:
     return httpx.Client(base_url=settings.whatsapp_gateway_url, timeout=_TIMEOUT_SECONDS)
 
 
+def send_reminder(recipient: str, body: str) -> dict:
+    try:
+        with _client() as client:
+            response = client.post("/control/send", json={"recipient": recipient, "body": body},
+                                   headers={"X-Gateway-Secret": settings.whatsapp_gateway_shared_secret or ""})
+            response.raise_for_status()
+            result = response.json()
+            if not result.get("message_id"):
+                raise ValueError("Confirmation d'envoi absente")
+            return result
+    except (httpx.HTTPError, ValueError) as exc:
+        raise GatewayUnavailableError("Envoi non confirmé") from exc
+
+
 def get_control_status() -> dict:
     try:
         with _client() as client:
