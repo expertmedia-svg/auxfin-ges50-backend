@@ -13,7 +13,7 @@ from app.core.permissions import READ_ROLES, WRITE_ROLES
 from app.models.evidence import EvidenceFile
 from app.models.followup import EvidenceFollowup, FollowupMessage
 from app.models.identity import User
-from app.services.followups import recipient_for, same_sender, update_followups, usable, utc_naive
+from app.services.followups import recipient_for, report_key, same_sender, update_followups, usable, utc_naive
 from app.services.whatsapp.gateway_client import GatewayUnavailableError, send_reminder
 
 router = APIRouter(prefix="/followups", tags=["followups"])
@@ -80,6 +80,9 @@ class ReminderRequest(BaseModel):
 @router.post("/send")
 def send(payload: ReminderRequest, db: Session = Depends(get_db), user: User = Depends(require_roles(*WRITE_ROLES))):
     prepared = []
+    reserved_keys = set()
+    open_tasks = db.query(EvidenceFollowup).filter(EvidenceFollowup.status != "RESOLVED").all()
+    keys = {t.id: report_key(db, db.get(EvidenceFile, t.evidence_id)) for t in open_tasks}
     for task_id in dict.fromkeys(payload.followup_ids):
         task = db.get(EvidenceFollowup, task_id)
         if not task or task.status == "RESOLVED":
@@ -87,22 +90,28 @@ def send(payload: ReminderRequest, db: Session = Depends(get_db), user: User = D
         recipient = recipient_for(db, db.get(EvidenceFile, task.evidence_id))
         if not recipient:
             raise HTTPException(400, "Un destinataire est inconnu. Complétez le numéro WhatsApp de l'agent.")
-        last = db.query(FollowupMessage).filter_by(followup_id=task.id).order_by(FollowupMessage.created_at.desc()).first()
-        if last and (last.status in ("SENDING", "UNKNOWN")
-                     or (datetime.utcnow() - utc_naive(last.created_at)).total_seconds() < 60):
+        key = keys.get(task.id)
+        if key and key in reserved_keys:
+            continue  # Plusieurs fichiers du même rapport : un seul message.
+        reserved_keys.add(key or task.id)
+        related = sorted([t for t in open_tasks if t.id == task.id or (key and keys[t.id] == key)], key=lambda t: t.id)
+        attempts = db.query(FollowupMessage).filter(FollowupMessage.followup_id.in_([t.id for t in related])).all()
+        if any(m.status in ("SENDING", "UNKNOWN")
+               or (datetime.utcnow() - utc_naive(m.created_at)).total_seconds() < 60 for m in attempts):
             raise HTTPException(409, "Envoi récent ou résultat incertain : vérifiez l'historique avant de relancer.")
         body = payload.message.strip() if payload.message else suggested_message(task, db.get(EvidenceFile, task.evidence_id))
         if not body:
             raise HTTPException(400, "Le message ne peut pas être vide.")
         # Comparaison atomique : deux opérateurs ne peuvent réserver le même
         # dossier avec la même version et envoyer deux relances simultanées.
-        claimed = db.execute(update(EvidenceFollowup).where(
-            EvidenceFollowup.id == task.id, EvidenceFollowup.send_version == task.send_version,
-            EvidenceFollowup.status != "RESOLVED",
-        ).values(send_version=EvidenceFollowup.send_version + 1).execution_options(synchronize_session=False))
-        if claimed.rowcount != 1:
-            db.rollback()
-            raise HTTPException(409, "Ce dossier vient d'être modifié. Actualisez la liste.")
+        for sibling in related:
+            claimed = db.execute(update(EvidenceFollowup).where(
+                EvidenceFollowup.id == sibling.id, EvidenceFollowup.send_version == sibling.send_version,
+                EvidenceFollowup.status != "RESOLVED",
+            ).values(send_version=EvidenceFollowup.send_version + 1).execution_options(synchronize_session=False))
+            if claimed.rowcount != 1:
+                db.rollback()
+                raise HTTPException(409, "Ce rapport vient d'être modifié. Actualisez la liste.")
         attempt = FollowupMessage(followup_id=task.id, requested_by_id=user.id, recipient=recipient, body=body)
         db.add(attempt)
         prepared.append((task, attempt))

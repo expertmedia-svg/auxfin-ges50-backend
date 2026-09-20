@@ -122,6 +122,7 @@ class EvidenceExtraction(UUIDMixin, TimestampMixin, Base):
 
     raw_ocr_text: Mapped[str] = mapped_column(String, default="")
     requires_manual_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_observations: Mapped[list] = mapped_column(JSON, default=list)
 
     manually_corrected_group_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     manually_corrected_date: Mapped[str | None] = mapped_column(String(20), nullable=True)

@@ -199,7 +199,8 @@ def list_evidence(
     total = query.count()
     response.headers["X-Total-Count"] = str(total)
     response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
-    items = query.options(joinedload(EvidenceFile.extraction)).order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all()
+    items = (query.options(joinedload(EvidenceFile.extraction))
+             .order_by(EvidenceFile.received_at.desc()).offset(offset).limit(limit).all())
     return _attach_whatsapp_origin(db, items)
 
 
@@ -401,6 +402,7 @@ def correct_evidence(
     if extraction is None:
         extraction = EvidenceExtraction(evidence_id=evidence.id)
         db.add(extraction)
+        evidence.extraction = extraction
 
     history_entry = {
         "corrected_by": user.id,
@@ -434,6 +436,8 @@ def correct_evidence(
         db, user_id=user.id, action="evidence.correct", entity_type="evidence_file", entity_id=evidence.id,
         details=history_entry,
     )
+    from app.services.followups import update_followups
+    update_followups(db, evidence)
     db.commit()
     db.refresh(extraction)
     return extraction
@@ -475,6 +479,8 @@ def set_evidence_status(
         )
     previous_status = evidence.processing_status
     evidence.processing_status = new_status
+    from app.services.followups import update_followups
+    update_followups(db, evidence)
     record_audit(
         db, user_id=user.id, action="evidence.status_override", entity_type="evidence_file", entity_id=evidence.id,
         details={
@@ -521,6 +527,8 @@ def reject_evidence(
     evidence = db.get(EvidenceFile, evidence_id)
     if evidence:
         evidence.processing_status = ProcessingStatus.FAILED
+        from app.services.followups import update_followups
+        update_followups(db, evidence)
     db.commit()
 
 

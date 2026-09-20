@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     ocr_confidence_threshold: float = 0.55
     groq_vision_enabled: bool = False
     groq_api_key: str | None = None
-    groq_vision_model: str = "qwen/qwen3.6-27b"
+    groq_vision_model: str = "qwen/qwen3.8-27b"
+    groq_assistant_enabled: bool = False
+    groq_assistant_model: str = "openai/gpt-oss-120b"
     fuzzy_match_threshold: int = 88
     reconciliation_date_tolerance_days: int = 0
 

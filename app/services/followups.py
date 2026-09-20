@@ -60,8 +60,25 @@ def problem_reason(evidence: EvidenceFile) -> str | None:
 def same_sender(db: Session, original: EvidenceFile, replacement: EvidenceFile) -> bool:
     if original.agent_id and replacement.agent_id:
         return original.agent_id == replacement.agent_id
-    recipient = recipient_for(db, original)
-    return bool(recipient and recipient == recipient_for(db, replacement))
+    identity = sender_identity(db, original)
+    return bool(identity and identity == sender_identity(db, replacement))
+
+
+def sender_identity(db: Session, evidence: EvidenceFile) -> str | None:
+    if evidence.agent_id:
+        return evidence.agent_id
+    recipient = recipient_for(db, evidence)
+    if recipient and recipient.endswith("@c.us"):
+        candidates = [a.id for a in db.query(Agent).filter(Agent.whatsapp_phone.isnot(None))
+                      if re.sub(r"[\s+().-]", "", a.whatsapp_phone) + "@c.us" == recipient]
+        if len(candidates) == 1:
+            return candidates[0]
+    if recipient:
+        linked = db.query(EvidenceFile.agent_id).join(WhatsAppMessage, WhatsAppMessage.evidence_id == EvidenceFile.id).filter(
+            WhatsAppMessage.sender_external_id == recipient, EvidenceFile.agent_id.isnot(None)).distinct().all()
+        if len(linked) == 1:
+            return linked[0][0]
+    return recipient
 
 
 def matches(db: Session, original: EvidenceFile, replacement: EvidenceFile) -> bool:
@@ -71,11 +88,29 @@ def matches(db: Session, original: EvidenceFile, replacement: EvidenceFile) -> b
     return bool(usable(replacement) and same_sender(db, original, replacement)
                 and original.application_id == replacement.application_id
                 and utc_naive(replacement.received_at) >= utc_naive(original.received_at)
-                and a and b and a.effective_group_id and a.effective_date
+                and a and b and a.effective_group_id and a.effective_date and not a.date_is_ambiguous
                 and a.effective_group_id == b.effective_group_id and a.effective_date == b.effective_date)
 
 
+def report_key(db: Session, evidence: EvidenceFile) -> tuple | None:
+    """Une identité complète est nécessaire pour fusionner des demandes."""
+    ex = evidence.extraction
+    sender = sender_identity(db, evidence)
+    if sender and evidence.application_id and ex and ex.effective_group_id and ex.effective_date and not ex.date_is_ambiguous:
+        return sender, evidence.application_id, ex.effective_group_id, ex.effective_date
+    return None
+
+
 def update_followups(db: Session, evidence: EvidenceFile) -> None:
+    # Une preuve de remplacement rejetée/corrigée ne doit pas laisser des
+    # dossiers clôturés à tort. Une association manuelle reste possible pour
+    # les originaux incomplets : on contrôle ici l'exploitabilité du retour.
+    if not usable(evidence) and evidence.processing_status not in ("PENDING", "QUEUED", "PROCESSING"):
+        for resolved in db.query(EvidenceFollowup).filter_by(
+                replacement_evidence_id=evidence.id, status="RESOLVED"):
+            resolved.status = "OPEN"
+            resolved.replacement_evidence_id = None
+            resolved.resolved_at = None
     reason = problem_reason(evidence)
     task = db.query(EvidenceFollowup).filter_by(evidence_id=evidence.id).first()
     if reason:
@@ -83,6 +118,22 @@ def update_followups(db: Session, evidence: EvidenceFile) -> None:
             db.add(EvidenceFollowup(evidence_id=evidence.id, reason=reason))
         elif task.status != "RESOLVED":
             task.reason = reason
+        # Le worker peut finir l'ancienne vidéo après sa correction. Rechercher
+        # aussi les preuves déjà traitées, sans dépendre de l'ordre du worker.
+        db.flush()
+        task = db.query(EvidenceFollowup).filter_by(evidence_id=evidence.id).one()
+        if task.status != "RESOLVED":
+            candidates = db.query(EvidenceFile).filter(
+                EvidenceFile.application_id == evidence.application_id,
+                EvidenceFile.processing_status == "COMPLETED",
+                EvidenceFile.received_at >= evidence.received_at,
+            ).order_by(EvidenceFile.received_at, EvidenceFile.id)
+            for replacement in candidates:
+                if matches(db, evidence, replacement):
+                    task.status = "RESOLVED"
+                    task.replacement_evidence_id = replacement.id
+                    task.resolved_at = datetime.utcnow()
+                    break
     if usable(evidence):
         for pending in db.query(EvidenceFollowup).filter(EvidenceFollowup.status != "RESOLVED").all():
             original = db.get(EvidenceFile, pending.evidence_id)

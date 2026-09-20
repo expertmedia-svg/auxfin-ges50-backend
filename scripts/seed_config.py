@@ -81,7 +81,7 @@ APPLICATION_PROFILES = [
         # restent a faire — confirme par l'utilisateur en Phase C sur une
         # vraie video (Download/Media sont des etapes suivantes du meme
         # ecran, pas une condition de succes de la synchronisation elle-meme).
-        "success_keywords": ["upload data", "donnees synchronisees", "success", "completed"],
+        "success_keywords": ["donnees synchronisees", "success", "completed"],
         # "please provide location permission" retire des mots-cles d'echec :
         # confirme reel (Phase C) que ce message est une demande de permission
         # sans rapport avec l'etat de synchronisation (ex: geolocalisation

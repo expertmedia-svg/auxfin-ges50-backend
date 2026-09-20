@@ -34,10 +34,11 @@ def _resolve_agent(db: Session, sender_phone: str | None) -> Agent | None:
     normalized = _normalize_phone(sender_phone)
     if not normalized:
         return None
-    for agent in db.query(Agent).filter(Agent.whatsapp_phone.isnot(None)):
-        if _normalize_phone(agent.whatsapp_phone) == normalized:
-            return agent
-    return None
+    if "@" in sender_phone:
+        return None
+    candidates = [agent for agent in db.query(Agent).filter(Agent.whatsapp_phone.isnot(None))
+                  if _normalize_phone(agent.whatsapp_phone) == normalized]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _enqueue(evidence_id: str) -> None:

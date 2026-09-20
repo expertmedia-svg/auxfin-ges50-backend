@@ -6,6 +6,8 @@ manuelle (pas de duplication de logique).
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -15,6 +17,7 @@ from app.services.video.frame_extractor import ExtractedFrame, VideoMetadata, ex
 from app.services.vision.date_parser import parse_date
 from app.services.vision.id_normalizer import find_id_candidates, normalize_group_id
 from app.services.vision.ocr_engine import best_result, combined_text, run_ocr_on_image_path
+from app.services.vision.preprocessing import load_image_corrected
 from app.services.vision.status_icon import detect_status_icon_color
 from app.services.vision.sync_status import detect_sync_status
 
@@ -130,8 +133,9 @@ def extract_from_image(
                                          "+".join(sorted({r.engine for r in ocr_results})))]
     if status_icon_zone:
         apply_icon_confirmation(outcome, image_path, status_icon_zone)
-    if application_code == "agricoach":
-        evaluate_sync_frames(outcome, success_keywords, error_keywords, application_code=application_code)
+    if application_code in ("agricoach", "pfnlcoach", "yebcoach"):
+        evaluate_sync_frames(outcome, success_keywords, error_keywords,
+                             icon_zone=status_icon_zone, application_code=application_code)
     return outcome
 
 
@@ -177,6 +181,35 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
     for frame in sorted((f for f in outcome.frame_debug if f.position in ("middle", "end")),
                         key=lambda f: duration - f.offset_seconds if f.position == "end" else f.offset_seconds):
         result = detect_sync_status(frame.raw_text, success_keywords, error_keywords)
+        if application_code in ("pfnlcoach", "yebcoach") and result.status != SyncStatus.FAILED:
+            normalized = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
+            labels = re.sub(r"[^a-z]", "", normalized)
+            image = load_image_corrected(frame.path)
+            height, width = image.shape[:2]
+            calibrated_layout = 1.52 <= width / height <= 1.68
+            if application_code == "pfnlcoach":
+                if "uploaddata" in labels:
+                    zone = {"x": .48, "y": .20, "w": .11, "h": .13}
+                    confirmed = calibrated_layout and detect_status_icon_color(frame.path, zone).is_green
+                    latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
+                              "PFNLCoach : Upload Data avec coche verte" if confirmed else
+                              "PFNLCoach : coche verte Upload Data non confirmee", .85 if confirmed else 0.0)
+            else:
+                # La règle opérateur du 20/09 exige Data ET Meta. L'ancien
+                # badge près de Synchroniser ne suffit pas. Les zones des deux
+                # coches doivent être calibrées sur une vraie capture positive.
+                required = (icon_zone or {}).get("required", {})
+                if "meta" in labels and ("data" in labels or "donnees" in labels):
+                    confirmed = (calibrated_layout and isinstance(required, dict)
+                                 and all(isinstance(required.get(k), dict) for k in ("data", "meta"))
+                                 and required["data"] != required["meta"]
+                                 and all(detect_status_icon_color(frame.path, required[k]).is_green
+                                         for k in ("data", "meta")))
+                    latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
+                              "YEBCoach : coches vertes Data et Meta confirmees" if confirmed else
+                              "YEBCoach : les coches Data et Meta restent a verifier", .85 if confirmed else 0.0)
+            # Un libellé ou un badge isolé ne contourne pas la règle spécifique.
+            continue
         if application_code == "agricoach" and result.status != SyncStatus.FAILED:
             from app.services.vision.agricoach_status import detect_agricoach_status
             checks = detect_agricoach_status(frame.path, frame.raw_text)

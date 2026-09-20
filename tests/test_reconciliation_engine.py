@@ -204,3 +204,36 @@ def test_mauvaise_application_detected(db_session):
     run = execute_reconciliation_run(db, run.id)
     statuses = _statuses(db, run.id)
     assert ReconciliationStatus.MAUVAISE_APPLICATION in statuses
+
+
+def test_different_dates_not_duplicates_and_exact_dashboard_row_selected(db_session):
+    db = db_session
+    app = _make_application(db)
+    dashboard = DashboardImport(application_id=app.id, original_filename="d.xlsx", storage_path="x", status="COMPLETED")
+    db.add(dashboard)
+    db.flush()
+    for day in ("2026-09-14", "2026-09-15"):
+        _make_dashboard_row(db, dashboard.id, "gr1.test", day, 1)
+        _make_evidence(db, app.id, "gr1.test", day, SyncStatus.SUCCESS)
+    run = ReconciliationRun(application_id=app.id, dashboard_import_id=dashboard.id,
+                            period_start="2026-09-14", period_end="2026-09-15")
+    db.add(run)
+    db.commit()
+    execute_reconciliation_run(db, run.id)
+    assert _statuses(db, run.id) == [ReconciliationStatus.CONFORME, ReconciliationStatus.CONFORME]
+
+
+def test_ambiguous_year_never_conforme(db_session):
+    db = db_session
+    app = _make_application(db)
+    dashboard = DashboardImport(application_id=app.id, original_filename="d.xlsx", storage_path="x", status="COMPLETED")
+    db.add(dashboard)
+    db.flush()
+    _make_dashboard_row(db, dashboard.id, "gr1.test", "2026-09-14", 1)
+    ev = _make_evidence(db, app.id, "gr1.test", "2026-09-14", SyncStatus.SUCCESS)
+    ev.extraction.date_is_ambiguous = True
+    run = ReconciliationRun(application_id=app.id, dashboard_import_id=dashboard.id)
+    db.add(run)
+    db.commit()
+    execute_reconciliation_run(db, run.id)
+    assert _statuses(db, run.id) == [ReconciliationStatus.VERIFICATION_MANUELLE]

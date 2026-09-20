@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EvidenceFrameOut(BaseModel):
@@ -24,6 +24,7 @@ class OcrResultOut(BaseModel):
 
 
 class EvidenceExtractionOut(BaseModel):
+    ai_observations: list[dict] = Field(default_factory=list)
     raw_group_id: str | None
     normalized_group_id: str | None
     id_correction_method: str | None

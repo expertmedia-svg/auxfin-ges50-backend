@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.applications import AgentGroupAssignment
@@ -73,11 +74,15 @@ def execute_reconciliation_run(db: Session, run_id: str) -> ReconciliationRun:
     db.query(ReconciliationResult).filter(ReconciliationResult.run_id == run.id).delete()
 
     whatsapp_entries = _collect_whatsapp_entries(db, run)
-    dashboard_rows = (
+    dashboard_query = (
         db.query(DashboardImportRow)
         .filter(DashboardImportRow.dashboard_import_id == dashboard_import.id, DashboardImportRow.is_valid.is_(True))
-        .all()
     )
+    if run.period_start:
+        dashboard_query = dashboard_query.filter(DashboardImportRow.sync_date >= run.period_start)
+    if run.period_end:
+        dashboard_query = dashboard_query.filter(DashboardImportRow.sync_date <= run.period_end)
+    dashboard_rows = dashboard_query.all()
 
     # IDs connus pour d'autres applications (detection MAUVAISE_APPLICATION).
     other_app_ids: set[str] = set()
@@ -108,7 +113,7 @@ def execute_reconciliation_run(db: Session, run_id: str) -> ReconciliationRun:
         known_group_ids = {a[0] for a in assignments}
 
     results: list[ReconciliationResult] = []
-    seen_wa_ids_this_run: dict[str, int] = defaultdict(int)
+    seen_wa_ids_this_run: dict[tuple, int] = defaultdict(int)
 
     for entry in whatsapp_entries:
         status, dashboard_group_id, dashboard_date, dashboard_row_id = _classify_whatsapp_entry(
@@ -130,10 +135,10 @@ def execute_reconciliation_run(db: Session, run_id: str) -> ReconciliationRun:
             )
         )
 
-    dashboard_id_counts: dict[str, int] = defaultdict(int)
+    dashboard_id_counts: dict[tuple, int] = defaultdict(int)
     for row in dashboard_rows:
         if row.normalized_group_id:
-            dashboard_id_counts[row.normalized_group_id] += 1
+            dashboard_id_counts[row.normalized_group_id, row.sync_date] += 1
 
     for row in dashboard_rows:
         if not row.normalized_group_id:
@@ -141,7 +146,7 @@ def execute_reconciliation_run(db: Session, run_id: str) -> ReconciliationRun:
         if row.normalized_group_id not in all_identified_whatsapp_ids:
             status = (
                 ReconciliationStatus.DOUBLON_DASHBOARD
-                if dashboard_id_counts[row.normalized_group_id] > 1
+                if dashboard_id_counts[row.normalized_group_id, row.sync_date] > 1
                 else ReconciliationStatus.DASHBOARD_SANS_PREUVE_WHATSAPP
             )
             results.append(
@@ -175,13 +180,19 @@ def _collect_whatsapp_entries(db: Session, run: ReconciliationRun) -> list[_What
         db.query(EvidenceExtraction, EvidenceFile)
         .join(EvidenceFile, EvidenceExtraction.evidence_id == EvidenceFile.id)
         .filter(EvidenceFile.processing_status.in_([ProcessingStatus.COMPLETED, ProcessingStatus.REQUIRES_REVIEW]))
+        .filter(EvidenceFile.is_duplicate_of_id.is_(None))
     )
     if run.application_id:
         query = query.filter(EvidenceFile.application_id == run.application_id)
+    report_date = func.coalesce(EvidenceExtraction.manually_corrected_date, EvidenceExtraction.normalized_date)
     if run.period_start:
-        query = query.filter(EvidenceFile.received_at >= run.period_start)
+        query = query.filter(or_(report_date >= run.period_start,
+                                 and_(report_date.is_(None), EvidenceFile.received_at >=
+                                      datetime.fromisoformat(run.period_start))))
     if run.period_end:
-        query = query.filter(EvidenceFile.received_at <= run.period_end)
+        query = query.filter(or_(report_date <= run.period_end,
+                                 and_(report_date.is_(None), EvidenceFile.received_at <
+                                      datetime.fromisoformat(run.period_end) + timedelta(days=1))))
 
     entries: list[_WhatsAppEntry] = []
     for extraction, evidence in query.all():
@@ -192,7 +203,9 @@ def _collect_whatsapp_entries(db: Session, run: ReconciliationRun) -> list[_What
                 group_id=extraction.effective_group_id,
                 sync_date=extraction.effective_date,
                 sync_status=extraction.sync_status,
-                requires_manual_review=extraction.requires_manual_review,
+                requires_manual_review=(extraction.requires_manual_review or extraction.date_is_ambiguous
+                                        or not evidence.application_id
+                                        or evidence.processing_status != ProcessingStatus.COMPLETED),
                 confidence=extraction.global_confidence,
                 agent_id=evidence.agent_id,
             )
@@ -205,7 +218,7 @@ def _classify_whatsapp_entry(
     dashboard_rows: list[DashboardImportRow],
     other_app_ids: set[str],
     known_group_ids: set[str],
-    seen_ids: dict[str, int],
+    seen_ids: dict[tuple, int],
     tolerance_days: int,
 ) -> tuple[ReconciliationStatus, str | None, str | None, str | None]:
     if not entry.group_id:
@@ -223,13 +236,15 @@ def _classify_whatsapp_entry(
     if entry.requires_manual_review:
         return ReconciliationStatus.VERIFICATION_MANUELLE, None, None, None
 
-    matching_rows = [r for r in dashboard_rows if r.normalized_group_id == entry.group_id]
+    matching_rows = [r for r in dashboard_rows if r.normalized_group_id == entry.group_id
+                     and r.dashboard_import.application_id in (None, entry.application_id)]
 
     if not matching_rows and entry.group_id in other_app_ids:
         return ReconciliationStatus.MAUVAISE_APPLICATION, None, None, None
 
-    seen_ids[entry.group_id] += 1
-    if seen_ids[entry.group_id] > 1:
+    key = (entry.application_id, entry.group_id, entry.sync_date)
+    seen_ids[key] += 1
+    if seen_ids[key] > 1:
         return ReconciliationStatus.DOUBLON_WHATSAPP, None, None, None
 
     if not matching_rows:
@@ -237,7 +252,13 @@ def _classify_whatsapp_entry(
             return ReconciliationStatus.ID_INCONNU, None, None, None
         return ReconciliationStatus.DECLARE_WHATSAPP_ABSENT_DASHBOARD, None, None, None
 
-    best_row = matching_rows[0]
+    # Plusieurs périodes peuvent exister pour un même groupe dans l'export.
+    def distance(row):
+        try:
+            return abs((datetime.fromisoformat(entry.sync_date) - datetime.fromisoformat(row.sync_date)).days)
+        except (ValueError, TypeError):
+            return float("inf")
+    best_row = min(matching_rows, key=distance)
     if entry.sync_date == best_row.sync_date:
         return ReconciliationStatus.CONFORME, best_row.normalized_group_id, best_row.sync_date, best_row.id
     if _date_within_tolerance(entry.sync_date, best_row.sync_date, tolerance_days):

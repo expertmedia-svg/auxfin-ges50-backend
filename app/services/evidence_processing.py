@@ -90,6 +90,22 @@ def process_evidence(db: Session, evidence_id: str) -> EvidenceFile:
             outcome.review_reasons.append("Transcription assistée par Groq : vérifier les données sur la preuve originale")
             outcome.requires_manual_review = True
         _persist_outcome(db, evidence, outcome, resolved_app)
+        # Trois images représentatives maximum pour les observations riches.
+        # Les suggestions IA n'écrasent jamais l'identité ni les statuts validés.
+        if settings.groq_vision_enabled and settings.groq_api_key:
+            from app.services.vision.groq_vision import observe
+            frames = outcome.extracted_frames
+            chosen = [frames[i] for i in sorted({0, len(frames) // 2, len(frames) - 1})] if frames else []
+            observations = []
+            for frame in chosen:
+                observation = observe(str(frame.path))
+                if observation:
+                    observations.append({**observation, "position": frame.position, "offset_seconds": frame.offset_seconds})
+            if not chosen:
+                observation = observe(str(_resolve_storage_path(evidence)))
+                if observation:
+                    observations.append(observation)
+            evidence.extraction.ai_observations = observations
 
         evidence.processing_status = (
             ProcessingStatus.REQUIRES_REVIEW if outcome.requires_manual_review else ProcessingStatus.COMPLETED
@@ -263,6 +279,7 @@ def _persist_outcome(
     extraction.global_confidence = outcome.global_confidence
     extraction.raw_ocr_text = outcome.raw_ocr_text
     extraction.requires_manual_review = outcome.requires_manual_review
+    extraction.ai_observations = []
     if evidence.extraction is None:
         db.add(extraction)
         evidence.extraction = extraction
