@@ -12,7 +12,7 @@ from app.services.followups import RECORDING_INSTRUCTIONS, recipient_for, update
 from app.services.whatsapp.gateway_client import GatewayUnavailableError, send_reminder
 
 
-def run_daily(db, user, now=None, execute=False):
+def _run_daily(db, user, now=None, execute=False):
     now = now or datetime.now(UTC)
     now = utc_naive(now)  # Burkina Faso = UTC, sans changement saisonnier.
     if not user.is_active or not set(user.role_codes) & WRITE_ROLES:
@@ -92,5 +92,21 @@ def run_daily(db, user, now=None, execute=False):
         for attempt in attempts:
             attempt.status = status
         db.get(DailyReminder, (day, recipient)).status = status
+        db.commit()
+    return result
+
+
+def run_daily(db, user, now=None, execute=False):
+    from app.models.followup import DailyReminderRun
+    try:
+        result = _run_daily(db, user, now, execute)
+    except Exception:
+        db.rollback()
+        if execute:
+            db.add(DailyReminderRun(result={"status": "ERROR"}))
+            db.commit()
+        raise
+    if execute:
+        db.add(DailyReminderRun(result=result))
         db.commit()
     return result

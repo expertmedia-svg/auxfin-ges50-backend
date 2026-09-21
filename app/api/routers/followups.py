@@ -102,6 +102,20 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(require_roles(*RE
                          for recipient, ids in monthly.items() if len(set(ids)) > 5]}
 
 
+@router.get("/automatic-stats")
+def automatic_stats(db: Session = Depends(get_db), _: User = Depends(require_roles(*READ_ROLES))):
+    from collections import Counter
+
+    from app.models.followup import DailyReminder, DailyReminderRun
+    today = datetime.utcnow().date().isoformat()
+    campaigns = db.query(DailyReminder).order_by(DailyReminder.day.desc(), DailyReminder.recipient).all()
+    counts = Counter(c.status for c in campaigns if c.day == today)
+    runs = db.query(DailyReminderRun).order_by(DailyReminderRun.created_at.desc()).limit(30).all()
+    return {"day": today, "counts": dict(counts),
+            "recipients": [{"day": c.day, "recipient": c.recipient, "status": c.status} for c in campaigns[:200]],
+            "runs": [{"at": r.created_at, "result": r.result} for r in runs]}
+
+
 @router.post("/refresh")
 def refresh(db: Session = Depends(get_db), user: User = Depends(require_roles(*WRITE_ROLES))):
     # Inclut les rapports déjà traités avant l'installation du suivi.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import JSON, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -37,3 +37,8 @@ class DailyReminder(Base):
     day: Mapped[str] = mapped_column(String(10), primary_key=True)
     recipient: Mapped[str] = mapped_column(String(150), primary_key=True)
     status: Mapped[str] = mapped_column(String(20), default="SENDING")
+
+
+class DailyReminderRun(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "daily_reminder_runs"
+    result: Mapped[dict] = mapped_column(JSON)
