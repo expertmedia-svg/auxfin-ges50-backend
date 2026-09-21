@@ -80,6 +80,10 @@ def overview(
             query = query.filter(f)
         return query.scalar() or 0
 
+    from app.services.readability import readable_filter
+    readable = count_evidence(readable_filter())
+    from app.services.report_status import report_filters
+    report_counts = {key: count_evidence(value) for key, value in report_filters().items()}
     total_evidence = count_evidence()
     total_images = count_evidence(EvidenceFile.media_type == EvidenceType.IMAGE)
     total_videos = count_evidence(EvidenceFile.media_type == EvidenceType.VIDEO)
@@ -126,6 +130,8 @@ def overview(
     taux_traitement = round((processed / total_evidence) * 100, 1) if total_evidence else 0.0
 
     return OverviewStats(
+        report_counts=report_counts,
+        readable=readable,
         total_evidence=total_evidence,
         total_images=total_images,
         total_videos=total_videos,

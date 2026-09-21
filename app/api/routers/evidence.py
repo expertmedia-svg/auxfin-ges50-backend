@@ -179,6 +179,10 @@ def list_evidence(
     application_id: str | None = None,
     processing_status: str | None = None,
     media_type: str | None = None,
+    report_status: str | None = None,
+    readable: bool | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
     requires_review: bool | None = None,
     limit: int = Query(default=50, le=500),
     offset: int = 0,
@@ -186,6 +190,19 @@ def list_evidence(
     _: User = Depends(require_roles(*READ_ROLES)),
 ) -> list[EvidenceFile]:
     query = db.query(EvidenceFile)
+    if report_status:
+        from app.services.report_status import report_filters
+        filters = report_filters()
+        if report_status not in filters:
+            raise HTTPException(422, "Statut de rapport inconnu")
+        query = query.filter(filters[report_status])
+    if readable:
+        from app.services.readability import readable_filter
+        query = query.filter(readable_filter())
+    if period_start or period_end:
+        from app.api.routers.statistics import _period_bounds, _apply_period
+        start, end = _period_bounds(period_start, period_end)
+        query = _apply_period(query, EvidenceFile.received_at, start, end)
     if evidence_id:
         query = query.filter(EvidenceFile.id == evidence_id)
     if application_id:

@@ -42,6 +42,7 @@ def suggested_message(task, evidence):
 
 @router.get("")
 def list_followups(
+    reference: str | None = Query(None, max_length=100),
     state: Literal["OPEN", "WAITING", "RESOLVED"] | None = None,
     view: Literal["OPEN", "WAITING", "RETURNED_INVALID", "RESOLVED"] | None = None,
     delay: int = Query(0, ge=0, le=365),
@@ -49,6 +50,8 @@ def list_followups(
     db: Session = Depends(get_db), _: User = Depends(require_roles(*READ_ROLES)),
 ):
     query = db.query(EvidenceFollowup)
+    if reference and reference.strip():
+        query = query.filter(EvidenceFollowup.id == reference.strip())
     if state:
         query = query.filter_by(status=state)
     if view or delay:
@@ -88,10 +91,12 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(require_roles(*RE
     for message in db.query(FollowupMessage).filter(FollowupMessage.status == "SENT"):
         if utc_naive(message.created_at).strftime("%Y-%m") == today.strftime("%Y-%m"):
             monthly[message.recipient].append(message.external_message_id or message.id)
+    sent_by_task = defaultdict(list)
+    for message in db.query(FollowupMessage).filter_by(status="SENT"):
+        sent_by_task[message.followup_id].append(message)
     for row in data["rows"]:
         ids = row["related_followup_ids"]
-        sent = db.query(FollowupMessage).filter(FollowupMessage.followup_id.in_(ids),
-                                              FollowupMessage.status == "SENT").all()
+        sent = [message for task_id in ids for message in sent_by_task[task_id]]
         last = max((utc_naive(m.created_at) for m in sent), default=None)
         row["sent_count"] = len(sent)
         row["last_sent_at"] = last.isoformat() if last else None
@@ -181,7 +186,10 @@ def send(payload: ReminderRequest, db: Session = Depends(get_db), user: User = D
     results = []
     for task, attempt in prepared:
         try:
-            result = send_reminder(attempt.recipient, attempt.body)
+            from app.services.reminder_media import reference_images
+            media = reference_images([(task, db.get(EvidenceFile, task.evidence_id))])
+            result = (send_reminder(attempt.recipient, attempt.body, media=media) if media else
+                      send_reminder(attempt.recipient, attempt.body))
             attempt.external_message_id = result["message_id"]
             attempt.status = "SENT"
             # Une nouvelle preuve peut avoir résolu le dossier pendant l'envoi.

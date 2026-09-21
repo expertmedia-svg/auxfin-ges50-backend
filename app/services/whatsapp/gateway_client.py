@@ -22,10 +22,10 @@ def _client() -> httpx.Client:
     return httpx.Client(base_url=settings.whatsapp_gateway_url, timeout=_TIMEOUT_SECONDS)
 
 
-def send_reminder(recipient: str, body: str) -> dict:
+def send_reminder(recipient: str, body: str, media=None) -> dict:
     try:
         with _client() as client:
-            response = client.post("/control/send", json={"recipient": recipient, "body": body},
+            response = client.post("/control/send", json={"recipient": recipient, "body": body, "media": media or []}, timeout=120,
                                    headers={"X-Gateway-Secret": settings.whatsapp_gateway_shared_secret or ""})
             response.raise_for_status()
             result = response.json()

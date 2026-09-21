@@ -79,7 +79,10 @@ def _run_daily(db, user, now=None, execute=False):
             result["skipped"] += 1
             continue
         try:
-            message_id = send_reminder(recipient, body)["message_id"]
+            from app.services.reminder_media import reference_images
+            media = reference_images(entries)
+            response = send_reminder(recipient, body, media=media) if media else send_reminder(recipient, body)
+            message_id = response["message_id"]
             status = "SENT"
             for attempt in attempts:
                 attempt.external_message_id = message_id

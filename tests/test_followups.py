@@ -182,3 +182,17 @@ def test_dashboard_counts_confirmed_monthly_messages(db_session, client, auth_to
     assert response.status_code == 200, response.text
     assert response.json()['frequent'] == [{"recipient": "22670000001@c.us", "sent_count": 6}]
     assert response.json()['rows'][0]['sent_count'] == 6
+
+
+def test_search_followup_reference(db_session, client, auth_token):
+    first = make_report(db_session)
+    second = make_report(db_session, group="gr2.test")
+    update_followups(db_session, first)
+    update_followups(db_session, second)
+    db_session.commit()
+    task = db_session.query(EvidenceFollowup).filter_by(evidence_id=first.id).one()
+    response = client.get('/api/followups', params={"reference": task.id},
+                          headers={"Authorization": f"Bearer {auth_token}"})
+    assert response.status_code == 200
+    assert response.json()['total'] == 1
+    assert response.json()['items'][0]['evidence_id'] == first.id

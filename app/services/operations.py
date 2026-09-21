@@ -14,7 +14,7 @@ from app.models.applications import Agent
 from app.models.dashboard import DashboardImportRow
 from app.models.evidence import EvidenceFile
 from app.models.followup import EvidenceFollowup, FollowupMessage
-from app.services.followups import problem_reason, report_key, same_sender, sender_identity, usable, utc_naive
+from app.services.followups import problem_reason, sender_identity, usable, utc_naive
 
 
 class OperationQuery(BaseModel):
@@ -123,6 +123,17 @@ def operational_data(db, query: OperationQuery):
     elif query.dataset == "followups":
         rows = []
         indexed = {e["evidence_id"]: e for e in evidence}
+        keys = {}
+        by_report = defaultdict(list)
+        for item in evidence:
+            ev = objects[item["evidence_id"]]
+            ex = ev.extraction
+            key = ((item["sender_identity"], ev.application_id, ex.effective_group_id, ex.effective_date)
+                   if item["sender_identity"] and ev.application_id and ex and ex.effective_group_id
+                   and ex.effective_date and not ex.date_is_ambiguous else None)
+            keys[ev.id] = key
+            if key:
+                by_report[key].append(ev)
         messages = defaultdict(list)
         for m in db.query(FollowupMessage).order_by(FollowupMessage.created_at, FollowupMessage.id):
             messages[m.followup_id].append(m)
@@ -132,7 +143,7 @@ def operational_data(db, query: OperationQuery):
             if task.evidence_id not in indexed:
                 continue
             original = objects[task.evidence_id]
-            key = report_key(db, original) or (task.id,)
+            key = keys[original.id] or (task.id,)
             groups.setdefault(key, []).append(task)
         for tasks in groups.values():
             tasks.sort(key=lambda t: (utc_naive(objects[t.evidence_id].received_at), t.id))
@@ -141,11 +152,10 @@ def operational_data(db, query: OperationQuery):
             row = dict(indexed[task.evidence_id])
             history = sorted([m for t in tasks for m in messages[t.id]], key=lambda m: utc_naive(m.created_at))
             # Une réception est une preuve de retour, pas nécessairement une correction valide.
-            returned = [e for e in objects.values() if e.id != original.id and not e.is_duplicate_of_id
+            returned = [e for e in by_report.get(keys[original.id], [])
+                        if e.id != original.id and not e.is_duplicate_of_id
                         and utc_naive(e.received_at) > utc_naive(original.received_at)
-                        and history and utc_naive(e.received_at) > utc_naive(history[0].created_at)
-                        and same_sender(db, original, e) and report_key(db, original)
-                        and report_key(db, original) == report_key(db, e)]
+                        and history and utc_naive(e.received_at) > utc_naive(history[0].created_at)]
             resolved = next((t for t in tasks if t.status == "RESOLVED"), None)
             row.update({"followup_id": task.id, "related_followup_ids": [t.id for t in tasks],
                         "reason": task.reason, "status": "RESOLVED" if resolved else

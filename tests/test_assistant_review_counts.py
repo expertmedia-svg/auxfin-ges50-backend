@@ -5,7 +5,7 @@ from tests.test_evidence_status_and_origin import auth_token, client  # noqa: F4
 from tests.test_followups import make_report
 
 
-def test_invalid_reports_override_wrong_coverage_plan_without_assignments(db_session, client, auth_token, monkeypatch):
+def test_invalid_reports_semantic_plan_without_assignments(db_session, client, auth_token, monkeypatch):
     for _ in range(3):
         make_report(db_session, day="2026-09-14")
     monkeypatch.setattr(get_settings(), "groq_assistant_enabled", True)
@@ -13,7 +13,7 @@ def test_invalid_reports_override_wrong_coverage_plan_without_assignments(db_ses
     calls = []
     def groq(*args):
         calls.append(1)
-        return {"dataset": "coverage", "status": "MISSING", "scope": "selected"}
+        return {"dataset": "evidence", "status": "NOT_VALIDATED", "scope": "all"}
     monkeypatch.setattr("app.api.routers.assistant.groq_json", groq)
     response = client.post('/api/assistant/chat', headers={"Authorization": f"Bearer {auth_token}"}, json={
         "message": "combien de personne on des rapport non valide", "scope": "all", "start": "2026-09-21", "end": "2026-09-21"})
@@ -34,7 +34,7 @@ def test_general_report_count_uses_received_files_without_assignments(db_session
     monkeypatch.setattr(get_settings(), "groq_assistant_enabled", True)
     monkeypatch.setattr(get_settings(), "groq_api_key", "fake")
     monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *a: {
-        "dataset": "coverage", "status": "MISSING"})
+        "dataset": "evidence", "status": ""})
     response = client.post('/api/assistant/chat', headers={"Authorization": f"Bearer {auth_token}"}, json={
         "message": "combien de rapport", "scope": "selected", "start": "2026-09-21", "end": "2026-09-21"})
     assert response.status_code == 200, response.text

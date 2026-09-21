@@ -8,10 +8,10 @@ from app.core.config import get_settings
 from tests.test_evidence_status_and_origin import auth_token, client  # noqa: F401
 
 
-def test_missing_period_asks_without_query_or_groq(client, auth_token, monkeypatch):
+def test_missing_period_asks_after_intent_without_data_query(client, auth_token, monkeypatch):
     monkeypatch.setattr(get_settings(), 'groq_assistant_enabled', True)
     monkeypatch.setattr(get_settings(), 'groq_api_key', 'fake')
-    monkeypatch.setattr('app.api.routers.assistant.groq_json', lambda *a: pytest.fail('No inference before period choice'))
+    monkeypatch.setattr('app.api.routers.assistant.groq_json', lambda *a: {'mode': 'reports', 'period': 'ask'})
     monkeypatch.setattr('app.api.routers.assistant.data_or_error', lambda *a: pytest.fail('No report query before clarification'))
     result = client.post('/api/assistant/chat', headers={'Authorization': f'Bearer {auth_token}'}, json={
         'message': 'combien de personnes ont des rapports non valides', 'start': '2026-09-21', 'end': '2026-09-21'})
@@ -50,3 +50,17 @@ def test_ambiguous_task_after_period_still_does_not_execute(client, auth_token, 
         'message': 'fais le nécessaire', 'scope': 'all', 'start': '2026-09-21', 'end': '2026-09-21'})
     assert result.json()['action'] == 'clarify'
     assert result.json()['data'] is None
+
+
+def test_platform_guidance_needs_no_period(client, auth_token, monkeypatch):
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "groq_assistant_enabled", True)
+    monkeypatch.setattr(get_settings(), "groq_api_key", "fake")
+    answers = iter([{"mode": "guide"}, {"answer": "Le Centre WhatsApp permet de consulter la connexion."}])
+    monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *args: next(answers))
+    response = client.post('/api/assistant/chat', headers={"Authorization": f"Bearer {auth_token}"}, json={
+        "message": "Explique comment fonctionne le Centre WhatsApp", "scope": "auto",
+        "start": "2026-09-21", "end": "2026-09-21"})
+    assert response.status_code == 200, response.text
+    assert response.json()['action'] == 'guide'
+    assert response.json()['data'] is None

@@ -2,6 +2,8 @@ from pydantic import BaseModel
 
 
 class OverviewStats(BaseModel):
+    report_counts: dict[str, int] = {}
+    readable: int = 0
     total_evidence: int
     total_images: int
     total_videos: int
