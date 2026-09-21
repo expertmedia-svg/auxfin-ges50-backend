@@ -30,3 +30,10 @@ class FollowupMessage(UUIDMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="SENDING")
     external_message_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class DailyReminder(Base):
+    __tablename__ = "daily_reminders"
+    day: Mapped[str] = mapped_column(String(10), primary_key=True)
+    recipient: Mapped[str] = mapped_column(String(150), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), default="SENDING")

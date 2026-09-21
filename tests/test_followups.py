@@ -165,3 +165,20 @@ def test_arrival_during_send_does_not_reopen_resolved_task(db_session, client, a
     assert response.status_code == 200
     db_session.refresh(task)
     assert task.status == "RESOLVED"
+
+
+def test_dashboard_counts_confirmed_monthly_messages(db_session, client, auth_token):
+    ev = make_report(db_session)
+    update_followups(db_session, ev)
+    db_session.commit()
+    task = db_session.query(EvidenceFollowup).one()
+    from app.models.identity import User
+    user = db_session.query(User).first()
+    for i in range(7):
+        db_session.add(FollowupMessage(followup_id=task.id, recipient="22670000001@c.us",
+                                      body="Rappel", requested_by_id=user.id, status="SENT" if i < 6 else "UNKNOWN"))
+    db_session.commit()
+    response = client.get('/api/followups/dashboard', headers={"Authorization": f"Bearer {auth_token}"})
+    assert response.status_code == 200, response.text
+    assert response.json()['frequent'] == [{"recipient": "22670000001@c.us", "sent_count": 6}]
+    assert response.json()['rows'][0]['sent_count'] == 6

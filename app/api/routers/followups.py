@@ -13,7 +13,15 @@ from app.core.permissions import READ_ROLES, WRITE_ROLES
 from app.models.evidence import EvidenceFile
 from app.models.followup import EvidenceFollowup, FollowupMessage
 from app.models.identity import User
-from app.services.followups import recipient_for, report_key, same_sender, update_followups, usable, utc_naive
+from app.services.followups import (
+    RECORDING_INSTRUCTIONS,
+    recipient_for,
+    report_key,
+    same_sender,
+    update_followups,
+    usable,
+    utc_naive,
+)
 from app.services.whatsapp.gateway_client import GatewayUnavailableError, send_reminder
 
 router = APIRouter(prefix="/followups", tags=["followups"])
@@ -25,21 +33,32 @@ def suggested_message(task, evidence):
     context += f"{ex.effective_group_id if ex and ex.effective_group_id else 'Groupe à préciser'} / "
     context += f"{ex.effective_date if ex and ex.effective_date else 'Date à préciser'}"
     return (f"Bonjour {evidence.sender_name or ''}, votre rapport ({context}) est à refaire. "
-            f"Motif : {task.reason}. Merci de renvoyer dans le groupe WhatsApp surveillé une capture "
-            "nette de l'écran complet, avec l'identifiant du groupe, la date et la confirmation "
-            "finale de synchronisation visible. Si nécessaire, envoyez une courte vidéo. "
+            f"Motif : {task.reason}. {RECORDING_INSTRUCTIONS} "
+            "Renvoyez la correction dans le groupe WhatsApp d'origine. "
+            "Ne répondez pas avec une vidéo ou une image dans ce chat privé. "
+            "Envoyez vos autres rapports dans leurs groupes habituels. "
             f"Référence de suivi : {task.id}.")
 
 
 @router.get("")
 def list_followups(
     state: Literal["OPEN", "WAITING", "RESOLVED"] | None = None,
+    view: Literal["OPEN", "WAITING", "RETURNED_INVALID", "RESOLVED"] | None = None,
+    delay: int = Query(0, ge=0, le=365),
     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db), _: User = Depends(require_roles(*READ_ROLES)),
 ):
     query = db.query(EvidenceFollowup)
     if state:
         query = query.filter_by(status=state)
+    if view or delay:
+        summary = dashboard(db, None)
+        selected_ids = [task_id for row in summary["rows"]
+                        if (not view or row["status"] == view)
+                        and (not delay or (row["days_since_reminder"] is not None
+                                           and row["days_since_reminder"] >= delay))
+                        for task_id in row["related_followup_ids"]]
+        query = query.filter(EvidenceFollowup.id.in_(selected_ids))
     total = query.count()
     items = []
     for task in query.order_by(EvidenceFollowup.created_at.desc(), EvidenceFollowup.id).offset(offset).limit(limit):
@@ -56,6 +75,31 @@ def list_followups(
                           "created_at": m.created_at, "recipient": m.recipient} for m in messages],
         })
     return {"items": items, "total": total}
+
+
+@router.get("/dashboard")
+def dashboard(db: Session = Depends(get_db), _: User = Depends(require_roles(*READ_ROLES))):
+    from collections import Counter, defaultdict
+
+    from app.services.operations import OperationQuery, operational_data
+    today = datetime.utcnow().date()
+    data = operational_data(db, OperationQuery(dataset="followups", scope="all", start=today, end=today))
+    monthly = defaultdict(list)
+    for message in db.query(FollowupMessage).filter(FollowupMessage.status == "SENT"):
+        if utc_naive(message.created_at).strftime("%Y-%m") == today.strftime("%Y-%m"):
+            monthly[message.recipient].append(message.external_message_id or message.id)
+    for row in data["rows"]:
+        ids = row["related_followup_ids"]
+        sent = db.query(FollowupMessage).filter(FollowupMessage.followup_id.in_(ids),
+                                              FollowupMessage.status == "SENT").all()
+        last = max((utc_naive(m.created_at) for m in sent), default=None)
+        row["sent_count"] = len(sent)
+        row["last_sent_at"] = last.isoformat() if last else None
+        row["days_since_reminder"] = (datetime.utcnow() - last).days if last else None
+    return {"rows": data["rows"], "counts": dict(Counter(r["status"] for r in data["rows"])),
+            "month": today.strftime("%Y-%m"),
+            "frequent": [{"recipient": recipient, "sent_count": len(set(ids))}
+                         for recipient, ids in monthly.items() if len(set(ids)) > 5]}
 
 
 @router.post("/refresh")
@@ -100,6 +144,10 @@ def send(payload: ReminderRequest, db: Session = Depends(get_db), user: User = D
                or (datetime.utcnow() - utc_naive(m.created_at)).total_seconds() < 60 for m in attempts):
             raise HTTPException(409, "Envoi récent ou résultat incertain : vérifiez l'historique avant de relancer.")
         body = payload.message.strip() if payload.message else suggested_message(task, db.get(EvidenceFile, task.evidence_id))
+        if payload.message:
+            body += (f"\n{RECORDING_INSTRUCTIONS}\nRenvoyez chaque correction dans son groupe WhatsApp d'origine. "
+                     "Ne répondez pas avec une vidéo ou une image dans ce chat privé. "
+                     "Envoyez vos autres rapports dans leurs groupes habituels.")
         if not body:
             raise HTTPException(400, "Le message ne peut pas être vide.")
         # Comparaison atomique : deux opérateurs ne peuvent réserver le même

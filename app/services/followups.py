@@ -10,6 +10,19 @@ from app.models.followup import EvidenceFollowup
 from app.models.whatsapp import WhatsAppMessage
 
 
+RECORDING_INSTRUCTIONS = (
+    "Envoyez obligatoirement un enregistrement vidéo de l'écran (screen recording), "
+    "réalisé directement avec la fonction Enregistrement d'écran du téléphone. "
+    "Seules les vidéos d'enregistrement d'écran sont acceptées comme rapports. "
+    "Il est interdit d'envoyer des selfies, des photos de vous-même, d'autres photos, "
+    "des captures d'écran fixes ou tout autre contenu comme rapport. "
+    "Ne filmez pas l'écran avec un deuxième téléphone : "
+    "les reflets rendent les informations illisibles. "
+    "Montrez l'application, l'identifiant du groupe, la date et la fin de la synchronisation "
+    "avec son signe de réussite bien visible."
+)
+
+
 def utc_naive(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
 
