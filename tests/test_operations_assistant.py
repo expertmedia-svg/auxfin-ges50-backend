@@ -164,7 +164,7 @@ def test_groq_cannot_execute_arbitrary_tasks(db_session, client, auth_token, mon
     monkeypatch.setattr(get_settings(), "groq_api_key", "fake")
     monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *a: plan)
     response = client.post("/api/assistant/chat", headers={"Authorization": f"Bearer {auth_token}"},
-                           json={"message": "supprime la base", "start": "2026-09-14", "end": "2026-09-14"})
+                           json={"message": "supprime la base", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
     assert response.status_code == 502
 
 
@@ -176,7 +176,7 @@ def test_assistant_prepares_but_does_not_send(db_session, client, auth_token, mo
     monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *a: {"action": "prepare_reminders"})
     monkeypatch.setattr("app.api.routers.followups.send_reminder", lambda *a: pytest.fail("No unrequested send"))
     response = client.post("/api/assistant/chat", headers={"Authorization": f"Bearer {auth_token}"},
-                           json={"message": "prépare les relances", "start": "2026-09-14", "end": "2026-09-14"})
+                           json={"message": "prépare les relances", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
     assert response.status_code == 200, response.text
     assert len(response.json()["drafts"]) == 1
     assert db_session.query(FollowupMessage).count() == 0
@@ -190,7 +190,7 @@ def test_reader_cannot_prepare_reminders(db_session, client, auth_token, monkeyp
     monkeypatch.setattr(get_settings(), "groq_api_key", "fake")
     monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *a: {"action": "prepare_reminders"})
     response = client.post("/api/assistant/chat", headers={"Authorization": f"Bearer {auth_token}"},
-                           json={"message": "prépare", "start": "2026-09-14", "end": "2026-09-14"})
+                           json={"message": "prépare", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
     assert response.status_code == 403
 
 

@@ -20,6 +20,7 @@ from app.services.followups import report_key, same_sender, sender_identity, usa
 class OperationQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset: Literal["coverage", "followups", "evidence"] = "coverage"
+    scope: Literal["all", "selected"] = "selected"
     start: date
     end: date
     cadence: Literal["daily", "period"] = "daily"
@@ -31,6 +32,8 @@ class OperationQuery(BaseModel):
 
     @model_validator(mode="after")
     def period_valid(self):
+        if self.dataset == "coverage" and self.scope == "all":
+            raise ValueError("Les rapports attendus nécessitent une période sélectionnée.")
         if self.end < self.start or (self.end - self.start).days > 92:
             raise ValueError("Choisissez une période ordonnée de 93 jours maximum.")
         return self
@@ -60,7 +63,7 @@ def evidence_rows(db, query):
         if not day or (ex and ex.date_is_ambiguous):
             day = utc_naive(ev.received_at).date().isoformat()
             basis = "received_at_unverified"
-        if not query.start.isoformat() <= day <= query.end.isoformat():
+        if query.scope != "all" and not query.start.isoformat() <= day <= query.end.isoformat():
             continue
         agent = by_id.get(ev.agent_id)
         candidates = by_phone.get(phone_key(ev.sender_phone), [])
@@ -83,6 +86,8 @@ def evidence_rows(db, query):
             "group": ex.effective_group_id if ex else None,
             "date": day, "date_basis": basis, "received_at": ev.received_at.isoformat(),
             "status": state, "sync_status": ex.sync_status if ex else "UNCONFIRMED",
+            "processing_status": ev.processing_status,
+            "sender_identity": sender_identity(db, ev),
             "evidence_text": ex.sync_status_evidence_text if ex else None,
             "requires_review": ex.requires_manual_review if ex else True,
         })
@@ -93,12 +98,15 @@ def evidence_rows(db, query):
 def _filter(rows, query):
     return [r for r in rows if all(not getattr(query, k) or getattr(query, k).casefold() in str(r.get(k) or "").casefold()
                                   for k in ("application", "agent", "group", "locality"))
-            and (not query.status or r.get("status") == query.status)]
+            and (not query.status or r.get("status") == query.status
+                 or (query.status == "TO_REVIEW" and r.get("processing_status") == "REQUIRES_REVIEW")
+                 or (query.status == "NOT_VALIDATED" and r.get("status") in ("REVIEW", "FAILED", "UNCONFIRMED")))]
 
 
 def operational_data(db, query: OperationQuery):
     evidence, objects = evidence_rows(db, query)
     warnings = []
+    coverage_available = True
     if query.dataset == "evidence":
         rows = evidence
     elif query.dataset == "followups":
@@ -177,10 +185,17 @@ def operational_data(db, query: OperationQuery):
             "Présence dashboard = ligne dans un import terminé, pas une vérification en temps réel du système principal.",
         ])
         if not assignments:
+            coverage_available = False
             warnings.append("Aucune affectation active : impossible de déterminer qui devait transmettre un rapport.")
     rows = _filter(rows, query)
     if len(rows) > 20000:
         raise ValueError("Plus de 20 000 lignes : affinez les filtres.")
     return {"query": query.model_dump(mode="json"), "total": len(rows),
+            "coverage_available": coverage_available,
+            "registered_agents_count": len({r["agent_id"] for r in rows if r.get("agent_id")}),
+            "unregistered_contacts_count": len({r["sender_identity"] for r in rows
+                                                 if not r.get("agent_id") and r.get("sender_identity")}),
+            "unknown_sender_reports_count": sum(not r.get("agent_id") and not r.get("sender_identity") for r in rows),
+            "review_queue_count": sum(r.get("processing_status") == "REQUIRES_REVIEW" for r in rows),
             "counts": dict(Counter(r["status"] for r in rows)), "rows": rows, "warnings": warnings,
             "unattributed_evidence_count": sum(not r["agent_id"] or r["date_basis"] != "report_date" for r in evidence)}

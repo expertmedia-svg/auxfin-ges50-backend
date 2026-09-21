@@ -1,7 +1,9 @@
 import csv
 import io
 import json
-from datetime import date
+import re
+import unicodedata
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 import httpx
@@ -31,6 +33,7 @@ class Turn(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    scope: Literal["auto", "all", "selected"] = "auto"
     message: str = Field(min_length=1, max_length=4000)
     history: list[Turn] = Field(default_factory=list, max_length=10)
     start: date
@@ -44,6 +47,8 @@ class ChatRequest(BaseModel):
 
 
 class Plan(BaseModel):
+    clarification: str | None = Field(default=None, max_length=500)
+    scope: Literal["all", "selected"] = "all"
     model_config = ConfigDict(extra="forbid")
     dataset: Literal["coverage", "followups", "evidence"] = "coverage"
     action: Literal["read", "export", "prepare_reminders"] = "read"
@@ -70,6 +75,50 @@ def data_or_error(db, query):
         return operational_data(db, query)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+def clarification_response(question, options=None):
+    return {"action": "clarify", "answer": question, "data": None, "drafts": [],
+            "clarification": {"question": question, "options": options or []}}
+
+
+def resolve_period(payload):
+    """Les dates implicites de l'interface ne constituent pas un choix utilisateur."""
+    today = datetime.now(UTC).date()
+    text = unicodedata.normalize("NFKD", payload.message).encode("ascii", "ignore").decode().lower()
+    choices = [
+        {"label": "Aujourd'hui", "scope": "selected", "start": today, "end": today},
+        {"label": "Cette semaine", "scope": "selected", "start": today - timedelta(days=today.weekday()), "end": today},
+        {"label": "Ce mois", "scope": "selected", "start": today.replace(day=1), "end": today},
+        {"label": "Tout l'historique", "scope": "all", "start": today, "end": today},
+    ]
+    selected = None
+    if re.search(r"aujourd|du jour", text):
+        selected = choices[0]
+    elif "cette semaine" in text:
+        selected = choices[1]
+    elif "ce mois" in text:
+        selected = choices[2]
+    elif re.search(r"tout l.?histori|tous les rapports|toutes les preuves|depuis le debut", text):
+        selected = choices[3]
+    elif re.search(r"\bhier\b", text):
+        selected = {"scope": "selected", "start": today - timedelta(days=1), "end": today - timedelta(days=1)}
+    if selected:
+        return payload.model_copy(update={k: selected[k] for k in ("scope", "start", "end")}), None
+    dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}/\d{4}\b", text)
+    if 1 <= len(dates) <= 2:
+        try:
+            parsed = [datetime.strptime(d, "%Y-%m-%d" if "-" in d else "%d/%m/%Y").date() for d in dates]
+            OperationQuery(start=parsed[0], end=parsed[-1])
+            return payload.model_copy(update={"scope": "selected", "start": parsed[0], "end": parsed[-1]}), None
+        except ValueError:
+            return payload, clarification_response(
+                "Précisez des dates valides, dans l'ordre, sur une période de 93 jours maximum.")
+    if payload.scope != "auto":
+        return payload, None
+    return payload, clarification_response(
+        "Sur quelle période souhaitez-vous consulter les rapports : aujourd’hui, cette semaine, ce mois ou tout l’historique ?",
+        choices)
 
 
 @router.get("/status")
@@ -125,7 +174,7 @@ def export(payload: ExportRequest, db: Session = Depends(get_db), user: User = D
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
         notes = workbook.create_sheet("Contexte")
-        notes.append(["Période", f"{query.start} — {query.end}"])
+        notes.append(["Période", "Tout l'historique" if query.scope == "all" else f"{query.start} — {query.end}"])
         notes.append(["Cadence", query.cadence])
         for warning in data["warnings"]:
             notes.append([warning])
@@ -145,6 +194,9 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
     settings = get_settings()
     if not settings.groq_assistant_enabled or not settings.groq_api_key:
         raise HTTPException(503, "Assistant conversationnel non configuré. Les contrôles et exports restent disponibles.")
+    payload, clarification = resolve_period(payload)
+    if clarification:
+        return clarification
     try:
         # Le modèle propose seulement une requête métier validée ; aucun SQL,
         # accès fichier ou appel d'envoi arbitraire n'est exécutable ici.
@@ -152,8 +204,15 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
             {"role": "system", "content": (
                 "Tu traduis une demande de contrôle GES50 en JSON conforme à ce schéma : "
                 + json.dumps(Plan.model_json_schema()) +
+                ". Si l'objectif, le statut, l'application ou une référence est ambigu, renseigne clarification "
+                "avec une question courte et précise. Ne devine pas. Si la demande est claire, clarification=null. "
                 ". coverage = rapports attendus par affectation agent/groupe/application ; "
                 "evidence = fichiers reçus ; followups = relances et retours. "
+                "Les rapports non valides/non validés sont dataset=evidence, status=NOT_VALIDATED. "
+                "Les rapports à vérifier (file de contrôle manuel) sont evidence, status=TO_REVIEW. "
+                "Ne jamais utiliser coverage pour compter des preuves déjà reçues. "
+                "scope=all pour un état général sans période demandée, selected pour une période demandée. "
+                "coverage exige scope=selected. Un nombre de rapports n'est pas un nombre de personnes. "
                 "Statuts coverage/evidence : MISSING, SYNCHRONIZED, REVIEW, PENDING, FAILED, UNCONFIRMED, DUPLICATE. "
                 "Statuts followups : OPEN, WAITING, RETURNED_INVALID, RESOLVED. "
                 "Laisser status vide pour tous. Filtres textuels par sous-chaîne, jamais inventer un identifiant. "
@@ -164,12 +223,33 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
             settings.groq_assistant_model, settings.groq_api_key))
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         raise HTTPException(502, "Groq n'a pas fourni une requête valide. Réessayez ou utilisez les contrôles directs.") from exc
+    if plan.clarification and plan.clarification.strip():
+        return clarification_response(plan.clarification.strip())
     if plan.action == "prepare_reminders" and not set(user.role_codes) & WRITE_ROLES:
         raise HTTPException(403, "Votre rôle ne permet pas de préparer des relances.")
     if plan.action == "prepare_reminders":
         plan.dataset = "followups"
+    normalized = unicodedata.normalize("NFKD", payload.message).encode("ascii", "ignore").decode().lower()
+    # Garde-fou métier : les demandes de contrôle des preuves reçues ne
+    # dépendent jamais de l'existence d'affectations dans le registre.
+    if plan.action != "prepare_reminders" and not re.search(r"relanc|renvoy|retour", normalized):
+        if re.search(r"non\s*valid|pas\s*valid|invalide", normalized):
+            plan.dataset, plan.status = "evidence", "NOT_VALIDATED"
+            plan.scope = "all"
+        elif re.search(r"a\s+verifier|a\s+valider|controle\s+manuel", normalized):
+            plan.dataset, plan.status = "evidence", "TO_REVIEW"
+            plan.scope = "all"
+    if payload.scope != "auto":
+        plan.scope = payload.scope
+    elif re.search(r"aujourd|hier|semaine|mois|periode|\d{4}-\d{2}|\d{1,2}/\d", normalized):
+        plan.scope = "selected"
+    if plan.dataset == "coverage":
+        if payload.scope == "all":
+            return clarification_response("Pour déterminer qui devait envoyer un rapport, précisez une période "
+                                          "et la fréquence attendue avec les sélecteurs ci-dessus.")
+        plan.scope = "selected"
     query = OperationQuery(start=payload.start, end=payload.end, cadence=payload.cadence,
-                           **plan.model_dump(exclude={"action", "format"}))
+                           **plan.model_dump(exclude={"action", "format", "clarification"}))
     data = data_or_error(db, query)
     drafts = []
     if plan.action == "prepare_reminders":
@@ -192,10 +272,23 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
                                "body": suggested_message(task, ev)})
             if len(drafts) >= 50:
                 break
-    answer = f"{data['total']} résultat(s) pour la période sélectionnée. "
+    period_label = "tout l'historique" if query.scope == "all" else f"la période {query.start} au {query.end}"
+    answer = f"{data['total']} résultat(s) sur {period_label}. "
     answer += "; ".join(f"{key} : {value}" for key, value in data["counts"].items())
     if plan.action == "prepare_reminders":
         answer += f"\n{len(drafts)} relance(s) préparée(s), aucun message envoyé. Maximum 50 par lot."
+    elif not data["coverage_available"]:
+        answer = ("Impossible de calculer les rapports attendus : aucune affectation active. "
+                  "Cela ne signifie pas qu'il n'existe aucun rapport reçu ou à vérifier. "
+                  "Consultez les preuves reçues pour compter les rapports non validés.")
+    elif query.dataset == "evidence":
+        answer = (f"Sur {period_label} : {data['total']} rapport(s) correspondant aux filtres, "
+                  f"dont {data['review_queue_count']} dans la file À vérifier. "
+                  f"Ils concernent {data['registered_agents_count']} agent(s) identifié(s) dans le registre et "
+                  f"{data['unregistered_contacts_count']} contact(s) distinct(s) non rattaché(s) à un agent. "
+                  f"{data['unknown_sender_reports_count']} rapport(s) ont un expéditeur non identifiable. "
+                  "Le nombre de rapports n'est pas le nombre de personnes ; "
+                  "plusieurs contacts peuvent désigner la même personne.")
     else:
         # La synthèse ne dispose d'aucun outil d'écriture. Les chiffres et les
         # sources restent affichés séparément même si Groq est indisponible.
