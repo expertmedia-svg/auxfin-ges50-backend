@@ -50,13 +50,14 @@ class Plan(BaseModel):
     clarification: str | None = Field(default=None, max_length=500)
     scope: Literal["all", "selected"] = "all"
     model_config = ConfigDict(extra="forbid")
-    dataset: Literal["coverage", "followups", "evidence"] = "coverage"
+    dataset: Literal["coverage", "followups", "evidence"] = "evidence"
     action: Literal["read", "export", "prepare_reminders"] = "read"
     format: Literal["csv", "xlsx"] = "xlsx"
     application: str = Field(default="", max_length=150)
     agent: str = Field(default="", max_length=200)
     group: str = Field(default="", max_length=200)
     locality: str = Field(default="", max_length=150)
+    evidence_id: str = Field(default="", max_length=100)
     status: str = Field(default="", max_length=50)
 
 
@@ -206,11 +207,13 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
                 + json.dumps(Plan.model_json_schema()) +
                 ". Si l'objectif, le statut, l'application ou une référence est ambigu, renseigne clarification "
                 "avec une question courte et précise. Ne devine pas. Si la demande est claire, clarification=null. "
-                ". coverage = rapports attendus par affectation agent/groupe/application ; "
+                ". coverage = présence des expéditeurs observés dans les rapports par groupe/application sans affectation ; "
                 "evidence = fichiers reçus ; followups = relances et retours. "
                 "Les rapports non valides/non validés sont dataset=evidence, status=NOT_VALIDATED. "
                 "Les rapports à vérifier (file de contrôle manuel) sont evidence, status=TO_REVIEW. "
                 "Ne jamais utiliser coverage pour compter des preuves déjà reçues. "
+                "Une demande générale comme combien de rapports signifie evidence, tous les états. "
+                "Réserver coverage aux demandes explicites sur les rapports attendus ou les agents n'ayant pas soumis. "
                 "scope=all pour un état général sans période demandée, selected pour une période demandée. "
                 "coverage exige scope=selected. Un nombre de rapports n'est pas un nombre de personnes. "
                 "Statuts coverage/evidence : MISSING, SYNCHRONIZED, REVIEW, PENDING, FAILED, UNCONFIRMED, DUPLICATE. "
@@ -230,6 +233,14 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
     if plan.action == "prepare_reminders":
         plan.dataset = "followups"
     normalized = unicodedata.normalize("NFKD", payload.message).encode("ascii", "ignore").decode().lower()
+    if plan.dataset == "coverage" and not re.search(
+        r"attendu|devait|devaient|doit|doivent|affectation|manquant|manque|"
+        r"(?:pas|jamais|non|sans).{0,25}(?:soumis|transmis|envoy|rapport)|qui.{0,20}reste", normalized
+    ):
+        plan.dataset = "evidence"
+        # MISSING décrit une attente sans preuve, pas un fichier reçu.
+        if plan.status == "MISSING":
+            plan.status = ""
     # Garde-fou métier : les demandes de contrôle des preuves reçues ne
     # dépendent jamais de l'existence d'affectations dans le registre.
     if plan.action != "prepare_reminders" and not re.search(r"relanc|renvoy|retour", normalized):
@@ -239,6 +250,8 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
         elif re.search(r"a\s+verifier|a\s+valider|controle\s+manuel", normalized):
             plan.dataset, plan.status = "evidence", "TO_REVIEW"
             plan.scope = "all"
+    if re.search(r"pourquoi|motif|raison", normalized) and plan.action == "read":
+        plan.dataset = "evidence"
     if payload.scope != "auto":
         plan.scope = payload.scope
     elif re.search(r"aujourd|hier|semaine|mois|periode|\d{4}-\d{2}|\d{1,2}/\d", normalized):
@@ -278,7 +291,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
     if plan.action == "prepare_reminders":
         answer += f"\n{len(drafts)} relance(s) préparée(s), aucun message envoyé. Maximum 50 par lot."
     elif not data["coverage_available"]:
-        answer = ("Impossible de calculer les rapports attendus : aucune affectation active. "
+        answer = ("Aucun participant identifiable dans les rapports reçus avant la fin de cette période. "
                   "Cela ne signifie pas qu'il n'existe aucun rapport reçu ou à vérifier. "
                   "Consultez les preuves reçues pour compter les rapports non validés.")
     elif query.dataset == "evidence":
@@ -309,6 +322,13 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
                 answer = summary["answer"][:4000]
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
             answer += "\nSynthèse Groq indisponible ; résultats du contrôle conservés."
+    if query.dataset == "evidence" and re.search(r"pourquoi|motif|raison", normalized):
+        details = [f"{r['filename']} (preuve {r['evidence_id']}) : "
+                   f"{r['review_reason'] or 'Aucun motif de correction enregistré.'}"
+                   for r in data["rows"][:20]]
+        answer += "\n\n" + "\n".join(details)
+        if data["total"] > 20:
+            answer += "\nAutres motifs disponibles dans le tableau et l’export complet."
     record_audit(db, user_id=user.id, action="assistant.chat", details={
         "query": query.model_dump(mode="json"), "action": plan.action, "total": data["total"], "draft_count": len(drafts)})
     db.commit()

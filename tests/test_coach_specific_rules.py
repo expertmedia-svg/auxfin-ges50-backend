@@ -23,7 +23,7 @@ def test_yeb_old_upload_badge_does_not_confirm_data_and_meta(monkeypatch):
     result = pipeline.extract_from_image(str(FIXTURES_DIR / "yebcoach_sync_confirmed_green.jpg"), ["success"], [],
                                           application_code="yebcoach", status_icon_zone=YEBCOACH_ICON_ZONE)
     assert result.sync_status == SyncStatus.UNCONFIRMED
-    assert "Data et Meta" in result.sync_status_evidence_text
+    assert "Data" in result.sync_status_evidence_text
 
 
 @pytest.mark.parametrize("filename,expected", [
@@ -36,3 +36,19 @@ def test_finance_existing_badge_rule_preserved(monkeypatch, filename, expected):
     result = pipeline.extract_from_image(str(FIXTURES_DIR / filename), [], [],
                                           application_code="financecoach", status_icon_zone=FINANCECOACH_ICON_ZONE)
     assert result.sync_status == expected
+
+
+@pytest.mark.parametrize("checked", [True, False])
+def test_yeb_data_first_checkbox_without_meta(tmp_path, checked):
+    import cv2
+    import numpy as np
+    from app.services.vision.yebcoach_status import detect_yebcoach_data_checked
+    image = np.full((400, 640, 3), 255, dtype=np.uint8)
+    cv2.circle(image, (400, 110), 14, (65, 65, 185), -1)
+    cv2.rectangle(image, (394, 104), (406, 116), (255, 255, 255), -1 if checked else 1)
+    if checked:
+        cv2.line(image, (396, 110), (399, 113), (65, 65, 185), 2)
+        cv2.line(image, (399, 113), (404, 106), (65, 65, 185), 2)
+    path = str(tmp_path / "data.png")
+    cv2.imwrite(path, image)
+    assert detect_yebcoach_data_checked(path, "Yeb Data") is checked

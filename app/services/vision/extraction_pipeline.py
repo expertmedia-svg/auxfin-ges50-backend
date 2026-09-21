@@ -195,19 +195,12 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
                               "PFNLCoach : Upload Data avec coche verte" if confirmed else
                               "PFNLCoach : coche verte Upload Data non confirmee", .85 if confirmed else 0.0)
             else:
-                # La règle opérateur du 20/09 exige Data ET Meta. L'ancien
-                # badge près de Synchroniser ne suffit pas. Les zones des deux
-                # coches doivent être calibrées sur une vraie capture positive.
-                required = (icon_zone or {}).get("required", {})
-                if "meta" in labels and ("data" in labels or "donnees" in labels):
-                    confirmed = (calibrated_layout and isinstance(required, dict)
-                                 and all(isinstance(required.get(k), dict) for k in ("data", "meta"))
-                                 and required["data"] != required["meta"]
-                                 and all(detect_status_icon_color(frame.path, required[k]).is_green
-                                         for k in ("data", "meta")))
+                from app.services.vision.yebcoach_status import detect_yebcoach_data_checked
+                if "data" in labels or "donnees" in labels:
+                    confirmed = detect_yebcoach_data_checked(frame.path, frame.raw_text)
                     latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
-                              "YEBCoach : coches vertes Data et Meta confirmees" if confirmed else
-                              "YEBCoach : les coches Data et Meta restent a verifier", .85 if confirmed else 0.0)
+                              "YEBCoach : case Data cochee" if confirmed else
+                              "YEBCoach : case Data non confirmee", .85 if confirmed else 0.0)
             # Un libellé ou un badge isolé ne contourne pas la règle spécifique.
             continue
         if application_code == "agricoach" and result.status != SyncStatus.FAILED:

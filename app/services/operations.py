@@ -10,11 +10,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import joinedload
 
-from app.models.applications import Agent, AgentGroupAssignment
+from app.models.applications import Agent
 from app.models.dashboard import DashboardImportRow
 from app.models.evidence import EvidenceFile
 from app.models.followup import EvidenceFollowup, FollowupMessage
-from app.services.followups import report_key, same_sender, sender_identity, usable, utc_naive
+from app.services.followups import problem_reason, report_key, same_sender, sender_identity, usable, utc_naive
 
 
 class OperationQuery(BaseModel):
@@ -28,6 +28,7 @@ class OperationQuery(BaseModel):
     agent: str = Field(default="", max_length=200)
     group: str = Field(default="", max_length=200)
     locality: str = Field(default="", max_length=150)
+    evidence_id: str = Field(default="", max_length=100)
     status: str = Field(default="", max_length=50)
 
     @model_validator(mode="after")
@@ -90,13 +91,23 @@ def evidence_rows(db, query):
             "sender_identity": sender_identity(db, ev),
             "evidence_text": ex.sync_status_evidence_text if ex else None,
             "requires_review": ex.requires_manual_review if ex else True,
+            "review_reason": problem_reason(ev),
+            "filename": ev.original_filename,
+            "detected_group": ex.effective_group_id if ex else None,
+            "detected_date": ex.effective_date if ex else None,
+            "date_is_ambiguous": ex.date_is_ambiguous if ex else True,
+            "confidence_group": ex.confidence_group_id if ex else None,
+            "confidence_date": ex.confidence_date if ex else None,
+            "confidence_sync": ex.confidence_sync if ex else None,
+            "confidence_global": ex.global_confidence if ex else None,
         })
         objects[ev.id] = ev
     return rows, objects
 
 
 def _filter(rows, query):
-    return [r for r in rows if all(not getattr(query, k) or getattr(query, k).casefold() in str(r.get(k) or "").casefold()
+    return [r for r in rows if (not query.evidence_id or r.get("evidence_id") == query.evidence_id)
+            and all(not getattr(query, k) or getattr(query, k).casefold() in str(r.get(k) or "").casefold()
                                   for k in ("application", "agent", "group", "locality"))
             and (not query.status or r.get("status") == query.status
                  or (query.status == "TO_REVIEW" and r.get("processing_status") == "REQUIRES_REVIEW")
@@ -147,46 +158,55 @@ def operational_data(db, query: OperationQuery):
         warnings.append("Retour après relance rapproché uniquement si agent, application, groupe et date concordent. "
                         "Les autres retours restent à vérifier.")
     else:
-        assignments = db.query(AgentGroupAssignment).options(joinedload(AgentGroupAssignment.agent),
-                                                            joinedload(AgentGroupAssignment.application)).all()
-        assignments = [a for a in assignments if a.agent.is_active and a.application.is_active]
+        # Population observée avant ou pendant la période : aucune affectation manuelle.
+        history, _ = evidence_rows(db, query.model_copy(update={"scope": "all"}))
+        observed = {}
+        for item in history:
+            if (item["sender_identity"] and item["application_id"] and item["group"]
+                    and item["status"] != "DUPLICATE"
+                    and item["received_at"][:10] <= query.end.isoformat()):
+                key = (item["sender_identity"], item["application_id"], item["group"])
+                observed.setdefault(key, item)
         days = ([query.start + timedelta(days=i) for i in range((query.end - query.start).days + 1)]
                 if query.cadence == "daily" else [query.start])
-        if len(assignments) * len(days) > 20000:
+        if len(observed) * len(days) > 20000:
             raise ValueError("Plus de 20 000 contrôles attendus : réduisez la période.")
         index = defaultdict(list)
         for ev in evidence:
             if ev["status"] != "DUPLICATE" and ev["date_basis"] == "report_date":
-                index[ev["agent_id"], ev["application_id"], ev["group"]].append(ev)
+                index[ev["sender_identity"], ev["application_id"], ev["group"]].append(ev)
         dashboard = defaultdict(set)
         for dr in db.query(DashboardImportRow).options(joinedload(DashboardImportRow.dashboard_import)).filter_by(
                 is_valid=True, is_duplicate=False):
             if dr.dashboard_import.status == "COMPLETED":
                 dashboard[dr.dashboard_import.application_id, dr.normalized_group_id].add(dr.sync_date)
         rows = []
-        for assignment in assignments:
-            found = index[assignment.agent_id, assignment.application_id, assignment.group_id]
+        for key, participant in observed.items():
+            found = index[key]
             for day in days:
                 matching = [e for e in found if query.cadence == "period" or e["date"] == day.isoformat()]
                 priority = {"SYNCHRONIZED": 0, "REVIEW": 1, "PENDING": 2, "FAILED": 3, "UNCONFIRMED": 4}
                 best = min(matching, key=lambda e: priority[e["status"]]) if matching else None
-                rows.append({"agent_id": assignment.agent_id, "agent": assignment.agent.full_name,
-                             "locality": assignment.agent.locality, "application": assignment.application.name,
-                             "group": assignment.group_id, "date": day.isoformat(),
+                rows.append({"sender_identity": participant["sender_identity"],
+                             "agent_id": participant["agent_id"], "agent": participant["agent"],
+                             "locality": participant["locality"], "application": participant["application"],
+                             "group": participant["group"], "date": day.isoformat(),
                              "period_end": query.end.isoformat() if query.cadence == "period" else day.isoformat(),
                              "status": best["status"] if best else "MISSING",
                              "evidence_id": best["evidence_id"] if best else None,
                              "submission_count": len(matching),
                              "dashboard_present": bool(best and best["date"] in dashboard[
-                                 assignment.application_id, assignment.group_id])})
+                                 participant["application_id"], participant["group"]])})
         warnings.extend([
-            "Attendus calculés sur les affectations actives actuelles ; pas de calendrier historique des affectations.",
-            "Une date ambiguë ou un agent inconnu empêche le rapprochement. MISSING signifie aucune preuve attribuable.",
+            "Participants déduits des rapports déjà reçus par expéditeur, application et groupe. "
+            "Les personnes jamais observées ne sont pas connues.",
+            "MISSING signifie aucune preuve attribuable pour un participant déjà observé ; "
+            "ce n’est pas une obligation de transmission. Une date ambiguë empêche le rapprochement.",
             "Présence dashboard = ligne dans un import terminé, pas une vérification en temps réel du système principal.",
         ])
-        if not assignments:
+        if not observed:
             coverage_available = False
-            warnings.append("Aucune affectation active : impossible de déterminer qui devait transmettre un rapport.")
+            warnings.append("Aucun participant identifiable dans les rapports reçus avant la fin de cette période.")
     rows = _filter(rows, query)
     if len(rows) > 20000:
         raise ValueError("Plus de 20 000 lignes : affinez les filtres.")

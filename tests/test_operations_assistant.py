@@ -12,7 +12,15 @@ from app.models.identity import User
 from app.services.followups import update_followups
 from app.services.operations import OperationQuery, operational_data
 from tests.test_evidence_status_and_origin import auth_token, client  # noqa: F401
-from tests.test_followups import make_report
+from tests.test_followups import make_report as original_make_report
+
+
+def make_report(db, **kwargs):
+    ev = original_make_report(db, **kwargs)
+    ev.received_at = datetime(2026, 9, 14, 12)
+    db.commit()
+    return ev
+
 
 
 def assignment(db, ev, name="Agent test", phone="22670000001"):
@@ -28,9 +36,8 @@ def query(**kwargs):
     return OperationQuery(start=date(2026, 9, 14), end=date(2026, 9, 14), **kwargs)
 
 
-def test_coverage_counts_assignments_not_files_and_requires_verified_date(db_session):
+def test_coverage_counts_observed_senders_without_assignments(db_session):
     ev = make_report(db_session, confirmed=True)
-    assignment(db_session, ev)
     make_report(db_session, confirmed=True)
     data = operational_data(db_session, query())
     assert data["total"] == 1
@@ -49,7 +56,7 @@ def test_coverage_does_not_assign_duplicate_phone_or_lid(db_session):
     ev = make_report(db_session, confirmed=True)
     assignment(db_session, ev)
     assignment(db_session, ev, name="Other")
-    assert operational_data(db_session, query())["counts"] == {"MISSING": 2}
+    assert operational_data(db_session, query())["counts"] == {"SYNCHRONIZED": 1}
     from app.services.whatsapp.ingestion import _resolve_agent
     assert _resolve_agent(db_session, "22670000001") is None
     assert _resolve_agent(db_session, "22670000001@lid") is None
@@ -176,7 +183,7 @@ def test_assistant_prepares_but_does_not_send(db_session, client, auth_token, mo
     monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *a: {"action": "prepare_reminders"})
     monkeypatch.setattr("app.api.routers.followups.send_reminder", lambda *a: pytest.fail("No unrequested send"))
     response = client.post("/api/assistant/chat", headers={"Authorization": f"Bearer {auth_token}"},
-                           json={"message": "prépare les relances", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
+                           json={"message": "prÃ©pare les relances", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
     assert response.status_code == 200, response.text
     assert len(response.json()["drafts"]) == 1
     assert db_session.query(FollowupMessage).count() == 0
@@ -190,7 +197,7 @@ def test_reader_cannot_prepare_reminders(db_session, client, auth_token, monkeyp
     monkeypatch.setattr(get_settings(), "groq_api_key", "fake")
     monkeypatch.setattr("app.api.routers.assistant.groq_json", lambda *a: {"action": "prepare_reminders"})
     response = client.post("/api/assistant/chat", headers={"Authorization": f"Bearer {auth_token}"},
-                           json={"message": "prépare", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
+                           json={"message": "prÃ©pare", "start": "2026-09-14", "end": "2026-09-14", "scope": "selected"})
     assert response.status_code == 403
 
 
@@ -215,7 +222,7 @@ def test_groq_visual_observation_contract(monkeypatch):
         assert request.headers["authorization"] == "Bearer fake"
         return httpx.Response(200, json={"choices": [{"message": {"content":
             '{"agent_name":"Agent test","locality":"Baporo","sync_signal":"success_visible",'
-            '"evidence_text":"upload_data et download_data cochés"}'}}]})
+            '"evidence_text":"upload_data et download_data cochÃ©s"}'}}]})
     factory = httpx.Client
     monkeypatch.setattr(groq_vision.httpx, "Client", lambda **kw: factory(transport=httpx.MockTransport(handler), **kw))
     result = groq_vision.observe(str(FIXTURES_DIR / "yebcoach_sync_confirmed_green.jpg"))

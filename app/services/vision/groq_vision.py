@@ -55,7 +55,7 @@ def observe(image_path: str) -> dict | None:
                             "evidence_text cite les mots ou décrit précisément les icônes qui justifient la lecture. "
                             "AgriCoach : succès uniquement si upload_data ET download_data ont une coche de succès ; "
                             "une case vide, un bouton Synchronize ou download_media ne prouve pas ce succès. "
-                            "YEBCoach : Data ET Meta doivent avoir leurs coches vertes ; un badge Upload seul ne suffit pas. "
+                            "YEBCoach : la case Data (ou Données) cochée suffit, même sur fond rouge ; Meta n’est pas requis. Un badge Upload seul ne suffit pas. "
                             "PFNLCoach : la première ligne Upload Data doit avoir une coche verte. "
                             "FinanceCoach : vérifier le petit badge vert ; le contour bleu d'une case ne suffit pas. "
                             "Pour les autres applications, exiger une confirmation explicite, sinon uncertain. "
