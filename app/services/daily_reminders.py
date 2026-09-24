@@ -39,7 +39,7 @@ def _run_daily(db, user, now=None, execute=False):
         existing = db.query(FollowupMessage).filter_by(recipient=recipient).all()
         if (db.get(DailyReminder, (day, recipient)) or any(
             m.status in ("SENDING", "UNKNOWN") or
-            (m.status == "SENT" and utc_naive(m.created_at).date().isoformat() == day) for m in existing)):
+            (m.status in ("SENT", "MANUALLY_CONFIRMED") and utc_naive(m.created_at).date().isoformat() == day) for m in existing)):
             result["skipped"] += 1
             continue
         lines = [f"Bonjour, voici vos rapports reçus le {day} à corriger :"]

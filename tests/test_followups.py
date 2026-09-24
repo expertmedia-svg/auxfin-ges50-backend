@@ -196,3 +196,43 @@ def test_search_followup_reference(db_session, client, auth_token):
     assert response.status_code == 200
     assert response.json()['total'] == 1
     assert response.json()['items'][0]['evidence_id'] == first.id
+
+
+def test_manual_send_confirmation_never_sends(db_session, client, auth_token, monkeypatch):
+    from app.models.identity import User
+    ev = make_report(db_session)
+    update_followups(db_session, ev)
+    db_session.commit()
+    task = db_session.query(EvidenceFollowup).one()
+    attempt = FollowupMessage(followup_id=task.id, requested_by_id=db_session.query(User).first().id,
+                              recipient="22670000001@c.us", body="test", status="UNKNOWN",
+                              created_at=datetime.utcnow() - timedelta(minutes=10))
+    db_session.add(attempt)
+    db_session.commit()
+    monkeypatch.setattr("app.api.routers.followups.send_reminder", lambda *a: pytest.fail("No send"))
+    result = client.post(f'/api/followups/messages/{attempt.id}/confirm-sent',
+                         headers={"Authorization": f"Bearer {auth_token}"})
+    assert result.status_code == 200, result.text
+    db_session.refresh(attempt)
+    assert attempt.status == "MANUALLY_CONFIRMED"
+    assert attempt.external_message_id is None
+
+
+def test_history_filters_time_and_includes_person_and_reference(db_session, client, auth_token):
+    from app.models.identity import User
+    ev = make_report(db_session)
+    update_followups(db_session, ev)
+    db_session.commit()
+    task = db_session.query(EvidenceFollowup).one()
+    user = db_session.query(User).first()
+    for when in (datetime.utcnow(), datetime.utcnow() - timedelta(days=40)):
+        db_session.add(FollowupMessage(followup_id=task.id, requested_by_id=user.id,
+                       recipient="22670000001@c.us", body="Rappel", status="SENT", created_at=when))
+    db_session.commit()
+    for period in ("day", "week", "month"):
+        response = client.get('/api/followups/history', params={"period": period},
+                              headers={"Authorization": f"Bearer {auth_token}"})
+        assert response.status_code == 200, response.text
+        assert response.json()['total'] == 1
+        assert response.json()['items'][0]['reference'] == task.id
+        assert response.json()['items'][0]['evidence_id'] == ev.id

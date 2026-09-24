@@ -9,7 +9,7 @@ from alembic import command
 from app.core.database import SessionLocal, engine
 from app.models.evidence import EvidenceFile
 from app.models.followup import EvidenceFollowup
-from app.services.followups import update_followups
+from app.services.followups import update_followups, usable
 
 
 def main():
@@ -23,6 +23,8 @@ def main():
     command.upgrade(config, "head")
     with SessionLocal() as db:
         for evidence in db.query(EvidenceFile).filter(EvidenceFile.processing_status.notin_(["PENDING", "QUEUED", "PROCESSING"])):
+            if usable(evidence):
+                evidence.processing_status = "COMPLETED"
             update_followups(db, evidence)
             db.flush()
         for evidence in db.query(EvidenceFile).filter_by(processing_status="COMPLETED"):

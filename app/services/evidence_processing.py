@@ -108,7 +108,8 @@ def process_evidence(db: Session, evidence_id: str) -> EvidenceFile:
             evidence.extraction.ai_observations = observations
 
         evidence.processing_status = (
-            ProcessingStatus.REQUIRES_REVIEW if outcome.requires_manual_review else ProcessingStatus.COMPLETED
+            ProcessingStatus.REQUIRES_REVIEW if outcome.requires_manual_review and outcome.sync_status != "SUCCESS"
+            else ProcessingStatus.COMPLETED
         )
         if job:
             job.status = JobStatus.COMPLETED

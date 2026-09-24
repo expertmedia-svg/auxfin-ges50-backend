@@ -14,7 +14,7 @@ Fonctions existantes :
   d'enregistrement d'écran directe ; ni selfies, photos, ni écran filmé avec un autre téléphone.
 - Preuves : filtres, vidéo et extraction, relance de l'analyse via l'interface.
 - Contrôle manuel : examiner la preuve, corriger groupe/date puis valider ou rejeter.
-  Une validation exige une preuve réelle ; ne jamais confirmer par simple supposition.
+  La synchronisation SUCCESS valide le rapport même si la date reste ambiguë. Ne jamais inventer un SUCCESS.
 - Relances : dossiers, référence de suivi recherchable, aperçu puis envoi privé,
   retours invalides ou valides. Les corrections doivent revenir dans le groupe d'origine,
   jamais dans le chat privé. Le rapprochement exige identité/application/groupe/date.

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -88,11 +88,13 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(require_roles(*RE
     today = datetime.utcnow().date()
     data = operational_data(db, OperationQuery(dataset="followups", scope="all", start=today, end=today))
     monthly = defaultdict(list)
-    for message in db.query(FollowupMessage).filter(FollowupMessage.status == "SENT"):
+    for message in db.query(FollowupMessage).filter(FollowupMessage.status.in_(["SENT", "MANUALLY_CONFIRMED"])):
         if utc_naive(message.created_at).strftime("%Y-%m") == today.strftime("%Y-%m"):
-            monthly[message.recipient].append(message.external_message_id or message.id)
+            monthly[message.recipient].append(message.external_message_id or
+                ((utc_naive(message.created_at).date().isoformat(), message.body)
+                 if message.status == "MANUALLY_CONFIRMED" else message.id))
     sent_by_task = defaultdict(list)
-    for message in db.query(FollowupMessage).filter_by(status="SENT"):
+    for message in db.query(FollowupMessage).filter(FollowupMessage.status.in_(["SENT", "MANUALLY_CONFIRMED"])):
         sent_by_task[message.followup_id].append(message)
     for row in data["rows"]:
         ids = row["related_followup_ids"]
@@ -101,10 +103,32 @@ def dashboard(db: Session = Depends(get_db), _: User = Depends(require_roles(*RE
         row["sent_count"] = len(sent)
         row["last_sent_at"] = last.isoformat() if last else None
         row["days_since_reminder"] = (datetime.utcnow() - last).days if last else None
-    return {"rows": data["rows"], "counts": dict(Counter(r["status"] for r in data["rows"])),
+    compact_rows = [{key: row[key] for key in ("followup_id", "related_followup_ids", "status",
+                    "sent_count", "last_sent_at", "days_since_reminder")} for row in data["rows"]]
+    return {"rows": compact_rows, "counts": dict(Counter(r["status"] for r in data["rows"])),
             "month": today.strftime("%Y-%m"),
             "frequent": [{"recipient": recipient, "sent_count": len(set(ids))}
                          for recipient, ids in monthly.items() if len(set(ids)) > 5]}
+
+
+@router.get("/history")
+def reminder_history(period: Literal["day", "week", "month"] = "day",
+                     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+                     db: Session = Depends(get_db), _: User = Depends(require_roles(*READ_ROLES))):
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today if period == "day" else today - timedelta(days=today.weekday()) if period == "week" else today.replace(day=1)
+    query = db.query(FollowupMessage, EvidenceFile.sender_name, EvidenceFile.original_filename,
+                     EvidenceFollowup.evidence_id, EvidenceFollowup.status).join(
+        EvidenceFollowup, EvidenceFollowup.id == FollowupMessage.followup_id).join(
+        EvidenceFile, EvidenceFile.id == EvidenceFollowup.evidence_id).filter(
+        FollowupMessage.created_at >= start, FollowupMessage.created_at < today + timedelta(days=1))
+    total = query.count()
+    rows = query.order_by(FollowupMessage.created_at.desc(), FollowupMessage.id).offset(offset).limit(limit).all()
+    return {"total": total, "start": start.date().isoformat(), "end": today.date().isoformat(),
+            "items": [{"id": m.id, "reference": m.followup_id, "recipient": m.recipient,
+                       "name": name, "filename": filename, "evidence_id": evidence_id,
+                       "sent_at": m.created_at, "send_status": m.status, "followup_status": status}
+                      for m, name, filename, evidence_id, status in rows]}
 
 
 @router.get("/automatic-stats")
@@ -244,5 +268,33 @@ def acknowledge_unknown(task_id: str, db: Session = Depends(get_db), user: User 
             raise HTTPException(409, "Attendez la fin de l'envoi en cours.")
         attempt.status = "CHECKED"
     record_audit(db, user_id=user.id, action="followup.unknown_checked", entity_id=task_id)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/messages/{message_id}/confirm-sent")
+def confirm_sent(message_id: str, db: Session = Depends(get_db), user: User = Depends(require_roles(*WRITE_ROLES))):
+    from app.models.followup import DailyReminder
+    attempt = db.get(FollowupMessage, message_id)
+    if not attempt:
+        raise HTTPException(404, "Message introuvable")
+    if attempt.status not in ("UNKNOWN", "CHECKED", "SENDING"):
+        raise HTTPException(409, "Ce message n'est pas en attente de vérification")
+    if (datetime.utcnow() - utc_naive(attempt.created_at)).total_seconds() < 180:
+        raise HTTPException(409, "Attendez la fin de l'envoi avant de vérifier")
+    day = utc_naive(attempt.created_at).date().isoformat()
+    campaign = db.get(DailyReminder, (day, attempt.recipient))
+    related = [attempt]
+    if campaign:
+        related = [m for m in db.query(FollowupMessage).filter_by(recipient=attempt.recipient, body=attempt.body)
+                   if utc_naive(m.created_at).date().isoformat() == day and m.status in ("UNKNOWN", "CHECKED", "SENDING")]
+    for message in related:
+        message.status = "MANUALLY_CONFIRMED"
+        db.execute(update(EvidenceFollowup).where(EvidenceFollowup.id == message.followup_id,
+            EvidenceFollowup.status != "RESOLVED").values(status="WAITING"))
+    if campaign:
+        campaign.status = "MANUALLY_CONFIRMED"
+    record_audit(db, user_id=user.id, action="followup.sent_verified_manually", entity_id=message_id,
+                 details={"message_ids": [m.id for m in related], "delivery_verified": False})
     db.commit()
     return {"ok": True}

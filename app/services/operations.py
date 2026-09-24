@@ -14,7 +14,8 @@ from app.models.applications import Agent
 from app.models.dashboard import DashboardImportRow
 from app.models.evidence import EvidenceFile
 from app.models.followup import EvidenceFollowup, FollowupMessage
-from app.services.followups import problem_reason, sender_identity, usable, utc_naive
+from app.models.whatsapp import WhatsAppMessage
+from app.services.followups import problem_reason, usable, utc_naive
 
 
 class OperationQuery(BaseModel):
@@ -54,6 +55,31 @@ def evidence_rows(db, query):
     for agent in agents:
         if phone_key(agent.whatsapp_phone):
             by_phone[phone_key(agent.whatsapp_phone)].append(agent)
+    # Charger les correspondances une fois, pas plusieurs requêtes par preuve.
+    recipients = {}
+    linked = defaultdict(set)
+    for evidence_id, recipient, agent_id in db.query(
+            WhatsAppMessage.evidence_id, WhatsAppMessage.sender_external_id, EvidenceFile.agent_id
+    ).outerjoin(EvidenceFile, EvidenceFile.id == WhatsAppMessage.evidence_id):
+        recipients.setdefault(evidence_id, recipient)
+        if recipient and agent_id:
+            linked[recipient].add(agent_id)
+
+    def identity(ev):
+        if ev.agent_id:
+            return ev.agent_id
+        recipient = recipients.get(ev.id)
+        if not recipient or not re.fullmatch(r"\d+@(c\.us|lid)", recipient):
+            phone = phone_key(ev.sender_phone)
+            recipient = phone + "@c.us" if phone else None
+        if recipient and recipient.endswith("@c.us"):
+            candidates = by_phone.get(recipient.split("@")[0], [])
+            if len(candidates) == 1:
+                return candidates[0].id
+        if recipient and len(linked[recipient]) == 1:
+            return next(iter(linked[recipient]))
+        return recipient
+
     rows, objects = [], {}
     # Pas de limite silencieuse : l'export et le tableau utilisent le même jeu.
     evidences = db.query(EvidenceFile).options(joinedload(EvidenceFile.extraction), joinedload(EvidenceFile.application))
@@ -66,12 +92,13 @@ def evidence_rows(db, query):
             basis = "received_at_unverified"
         if query.scope != "all" and not query.start.isoformat() <= day <= query.end.isoformat():
             continue
+        sender = identity(ev)
         agent = by_id.get(ev.agent_id)
         candidates = by_phone.get(phone_key(ev.sender_phone), [])
         if agent is None and len(candidates) == 1:
             agent = candidates[0]
         if agent is None:
-            agent = by_id.get(sender_identity(db, ev))
+            agent = by_id.get(sender)
         state = ("DUPLICATE" if ev.is_duplicate_of_id or ev.processing_status == "DUPLICATE" else
                  "SYNCHRONIZED" if usable(ev) else
                  "PENDING" if ev.processing_status in ("PENDING", "QUEUED", "PROCESSING") else
@@ -88,7 +115,7 @@ def evidence_rows(db, query):
             "date": day, "date_basis": basis, "received_at": ev.received_at.isoformat(),
             "status": state, "sync_status": ex.sync_status if ex else "UNCONFIRMED",
             "processing_status": ev.processing_status,
-            "sender_identity": sender_identity(db, ev),
+            "sender_identity": sender,
             "evidence_text": ex.sync_status_evidence_text if ex else None,
             "requires_review": ex.requires_manual_review if ex else True,
             "review_reason": problem_reason(ev),

@@ -42,10 +42,10 @@ def recipient_for(db: Session, evidence: EvidenceFile) -> str | None:
 
 def usable(evidence: EvidenceFile) -> bool:
     ex = evidence.extraction
-    return bool(evidence.processing_status == "COMPLETED" and evidence.application_id and ex
-                and ex.sync_status == "SUCCESS" and ex.effective_group_id and ex.effective_date
-                and not ex.requires_manual_review and not ex.date_is_ambiguous
+    return bool(ex and ex.sync_status == "SUCCESS"
+                and evidence.processing_status in ("COMPLETED", "REQUIRES_REVIEW")
                 and not evidence.is_duplicate_of_id)
+
 
 
 def problem_reason(evidence: EvidenceFile) -> str | None:
@@ -101,7 +101,7 @@ def matches(db: Session, original: EvidenceFile, replacement: EvidenceFile) -> b
     return bool(usable(replacement) and same_sender(db, original, replacement)
                 and original.application_id == replacement.application_id
                 and utc_naive(replacement.received_at) >= utc_naive(original.received_at)
-                and a and b and a.effective_group_id and a.effective_date and not a.date_is_ambiguous
+                and a and b and not b.date_is_ambiguous and a.effective_group_id and a.effective_date and not a.date_is_ambiguous
                 and a.effective_group_id == b.effective_group_id and a.effective_date == b.effective_date)
 
 
@@ -138,7 +138,7 @@ def update_followups(db: Session, evidence: EvidenceFile) -> None:
         if task.status != "RESOLVED":
             candidates = db.query(EvidenceFile).filter(
                 EvidenceFile.application_id == evidence.application_id,
-                EvidenceFile.processing_status == "COMPLETED",
+                EvidenceFile.processing_status.in_(["COMPLETED", "REQUIRES_REVIEW"]),
                 EvidenceFile.received_at >= evidence.received_at,
             ).order_by(EvidenceFile.received_at, EvidenceFile.id)
             for replacement in candidates:
