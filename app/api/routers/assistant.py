@@ -85,6 +85,21 @@ def groq_json(messages, model, key):
         return json.loads(response.json()["choices"][0]["message"]["content"])
 
 
+def groq_plan(messages, model, key):
+    """Retry malformed plans once, before any business action is executed."""
+    for attempt in range(2):
+        try:
+            return Plan.model_validate(groq_json(messages, model, key))
+        except (ValueError, KeyError, IndexError, TypeError):
+            if attempt:
+                raise
+            messages = [*messages, {"role": "system", "content": (
+                "La réponse précédente ne respectait pas le schéma. Retourne uniquement un objet JSON "
+                "conforme au schéma Plan fourni, sans champ supplémentaire. "
+                "Pour une salutation, utilise mode=guide et action=read."
+            )}]
+
+
 def data_or_error(db, query):
     try:
         return operational_data(db, query)
@@ -230,7 +245,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
         # Le modèle propose seulement une requête métier validée ; aucun SQL,
         # accès fichier ou appel d'envoi arbitraire n'est exécutable ici.
         plan = Plan.model_validate(
-            groq_json(
+            groq_plan(
                 [
                     {
                         "role": "system",
@@ -275,8 +290,10 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
                 settings.groq_api_key,
             )
         )
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(502, "Groq n'a pas fourni une requête valide. Réessayez ou utilisez les contrôles directs.") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "IA Auxfin est momentanément indisponible. Réessayez dans un instant.") from exc
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise HTTPException(502, "IA Auxfin n'a pas pu interpréter votre demande. Aucune action n'a été exécutée. Réessayez ou reformulez votre question.") from exc
     if plan.clarification and plan.clarification.strip():
         return clarification_response(plan.clarification.strip())
     if plan.mode != "reports" and plan.action != "read":
@@ -407,7 +424,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
             if isinstance(summary.get("answer"), str) and summary["answer"].strip():
                 answer = summary["answer"][:4000]
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
-            answer += "\nSynthèse Groq indisponible ; résultats du contrôle conservés."
+            answer += "\nSynthèse IA Auxfin indisponible ; résultats du contrôle conservés."
     if query.dataset == "evidence" and re.search(r"pourquoi|motif|raison", normalized):
         details = [
             f"{r['filename']} (preuve {r['evidence_id']}) : {r['review_reason'] or 'Aucun motif de correction enregistré.'}"

@@ -72,7 +72,7 @@ def observe(image_path: str) -> dict | None:
             return None
         return {**reading.model_dump(), "source": "groq", "model": settings.groq_vision_model, "verified": False}
     except (httpx.HTTPError, ValueError, KeyError, IndexError, OSError, TypeError):
-        logger.warning("Observation Groq indisponible ; résultat local conservé")
+        logger.warning("Observation IA Auxfin indisponible ; résultat local conservé")
         return None
 
 
@@ -115,5 +115,5 @@ def transcribe(image_path: str) -> str | None:
             return reading.text.strip() if reading.readable else None
     except (httpx.HTTPError, ValueError, KeyError, IndexError, OSError, TypeError):
         # Ne pas journaliser la réponse, la clé ou les images des agents.
-        logger.warning("Assistance Groq indisponible ou réponse invalide ; conservation du résultat OCR local")
+        logger.warning("Assistance IA Auxfin indisponible ou réponse invalide ; conservation du résultat OCR local")
         return None

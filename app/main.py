@@ -25,6 +25,18 @@ from app.api.routers import (
 from app.core.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
+
+
+class AuxfinHttpLogFilter(logging.Filter):
+    def filter(self, record):
+        message = record.getMessage()
+        if "api.groq.com" in message:
+            record.msg = message.replace("https://api.groq.com/openai/v1/chat/completions", "IA Auxfin")
+            record.args = ()
+        return True
+
+
+logging.getLogger("httpx").addFilter(AuxfinHttpLogFilter())
 settings = get_settings()
 
 app = FastAPI(

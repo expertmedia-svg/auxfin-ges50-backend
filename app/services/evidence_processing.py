@@ -87,7 +87,7 @@ def process_evidence(db: Session, evidence_id: str) -> EvidenceFile:
     try:
         outcome, resolved_app = _run_pipeline(db, evidence)
         if any("groq" in frame.engine for frame in outcome.frame_debug):
-            outcome.review_reasons.append("Transcription assistée par Groq : vérifier les données sur la preuve originale")
+            outcome.review_reasons.append("Transcription assistée par IA Auxfin : vérifier les données sur la preuve originale")
             outcome.requires_manual_review = True
         _persist_outcome(db, evidence, outcome, resolved_app)
         # Trois images représentatives maximum pour les observations riches.
