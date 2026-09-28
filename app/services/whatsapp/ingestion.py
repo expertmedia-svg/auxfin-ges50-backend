@@ -129,6 +129,20 @@ def handle_message_webhook(db: Session, payload: WhatsAppMessageWebhookIn) -> Wh
     db.add(message)
     db.flush()
 
+    from app.models.system import SystemSetting
+    reset = db.query(SystemSetting).filter_by(key="reports_reset_at").first()
+    if reset and reset.value.get("utc"):
+        cutoff = datetime.fromisoformat(reset.value["utc"])
+        stamp = payload.message_date
+        if stamp.tzinfo:
+            stamp = stamp.astimezone(UTC).replace(tzinfo=None)
+        if stamp < cutoff:
+            message.download_status = WhatsAppDownloadStatus.SKIPPED_NO_MEDIA.value
+            message.last_error = "Message antérieur à la remise à zéro ; non réimporté"
+            db.commit()
+            db.refresh(message)
+            return message
+
     if payload.download_status != WhatsAppDownloadStatus.DOWNLOADED.value:
         record_audit(
             db, user_id=None, action="whatsapp.message_failed", entity_type="whatsapp_message",

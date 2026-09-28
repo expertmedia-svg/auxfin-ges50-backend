@@ -90,6 +90,16 @@ def groq_plan(messages, model, key):
     for attempt in range(2):
         try:
             return Plan.model_validate(groq_json(messages, model, key))
+        except httpx.HTTPStatusError as exc:
+            # A rejected structured generation may succeed with a simpler reminder.
+            # Never retry authentication, quota or service failures here.
+            if exc.response.status_code != 400 or attempt:
+                raise
+            messages = [*messages, {"role": "system", "content": (
+                'Retourne un objet JSON Plan. Une conversation générale utilise '
+                '{"mode":"guide","action":"read"}. '
+                'Une demande métier conserve ses filtres et les règles du schéma.'
+            )}]
         except (ValueError, KeyError, IndexError, TypeError):
             if attempt:
                 raise
@@ -252,6 +262,9 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db), user: User = Depen
                         "content": (
                             "Comprends l'intention de la demande avec son historique, même avec fautes et reformulations. "
                             "Choisis mode=guide pour saluer, expliquer ou conseiller sans chiffres actuels. "
+                            "Exemples : 'comment va tu', 'ça va ?', 'merci', une question générale hors rapports "
+                            "sont des conversations mode=guide, action=read, clarification=null. "
+                            "Ne force pas une question générale dans une requête de rapports. "
                             "Choisis mode=tools pour un bilan actuel de la plateforme : overview pour les statistiques, "
                             "health pour la santé technique, automatic_reminders pour la campagne, agents et applications pour les registres. "
                             "Un bilan général demande overview, health et automatic_reminders. Ne prétends jamais disposer des résultats. "

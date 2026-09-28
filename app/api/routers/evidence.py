@@ -397,6 +397,8 @@ def reanalyze_evidence(
     evidence = db.get(EvidenceFile, evidence_id)
     if evidence is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Preuve introuvable")
+    if not get_storage_service().resolve(evidence.storage_path).is_file():
+        raise HTTPException(410, "Média supprimé ou indisponible. Les résultats et statistiques sont conservés.")
     evidence.processing_status = ProcessingStatus.QUEUED
     record_audit(db, user_id=user.id, action="evidence.reanalyze", entity_type="evidence_file", entity_id=evidence.id)
     db.commit()

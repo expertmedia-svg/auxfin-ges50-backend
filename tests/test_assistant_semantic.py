@@ -42,3 +42,30 @@ def test_unknown_tool_rejected(client, auth_token, monkeypatch):
     response = client.post('/api/assistant/chat', headers={"Authorization": f"Bearer {auth_token}"}, json={
         "message": "Supprime tout", "start": "2026-09-01", "end": "2026-09-01"})
     assert response.status_code == 502
+
+
+def test_greeting_after_rejected_generation(client, auth_token, monkeypatch):
+    import httpx
+    monkeypatch.setattr(get_settings(), "groq_assistant_enabled", True)
+    monkeypatch.setattr(get_settings(), "groq_api_key", "fake")
+    calls = []
+    def model(messages, *args):
+        calls.append(messages)
+        if len(calls) == 1:
+            response = httpx.Response(400, request=httpx.Request('POST', 'https://example.test'))
+            raise httpx.HTTPStatusError('Rejected', request=response.request, response=response)
+        if len(calls) == 2:
+            return {'mode': 'guide', 'action': 'read'}
+        return {'answer': 'Je vais bien, merci ! Et vous ?'}
+    monkeypatch.setattr('app.api.routers.assistant.groq_json', model)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('A greeting must not query reports')
+    monkeypatch.setattr('app.api.routers.assistant.operational_data', forbidden)
+    response = client.post('/api/assistant/chat', headers={'Authorization': f'Bearer {auth_token}'}, json={
+        'message': 'comment va tu', 'start': '2026-09-24', 'end': '2026-09-24'})
+    assert response.status_code == 200, response.text
+    assert response.json()['answer'] == 'Je vais bien, merci ! Et vous ?'
+    assert response.json()['action'] == 'guide'
+    assert response.json()['sources'] == {}
+    assert response.json()['drafts'] == []
+    assert len(calls) == 3
