@@ -41,3 +41,4 @@ __all__ = [
     "WhatsAppGroup",
     "WhatsAppMessage",
 ]
+from app.models.projects import Project, ProjectGroup, ProjectExpectedGroup

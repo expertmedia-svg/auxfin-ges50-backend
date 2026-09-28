@@ -207,13 +207,13 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
             from app.services.vision.agricoach_status import detect_agricoach_status
             checks = detect_agricoach_status(frame.path, frame.raw_text)
             if checks.confirmed:
-                latest = (SyncStatus.SUCCESS, "AgriCoach : upload_data et download_data coches sur le meme ecran", .95)
+                latest = (SyncStatus.SUCCESS, "AgriCoach : Data / upload_data coche (download facultatif)", .95)
                 continue
             if checks.panel_visible:
-                latest = (SyncStatus.UNCONFIRMED, "AgriCoach : les deux coches requises ne sont pas confirmees", 0.0)
+                latest = (SyncStatus.UNCONFIRMED, "AgriCoach : la coche Data / upload_data n’est pas confirmee", 0.0)
                 continue
             if result.status == SyncStatus.SUCCESS:
-                # Pour AgriCoach, un mot isolé ne remplace pas les deux coches.
+                # Pour AgriCoach, un mot isolé ne remplace pas la coche Data.
                 continue
         if result.matched_keyword:
             latest = (result.status, result.matched_keyword, result.confidence)

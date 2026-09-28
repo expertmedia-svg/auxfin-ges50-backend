@@ -74,3 +74,5 @@ app.include_router(whatsapp.router, prefix="/api")
 @app.get("/api/health", tags=["system"])
 def health() -> dict:
     return {"status": "ok", "service": settings.app_name}
+from app.api.routers import projects
+app.include_router(projects.router, prefix="/api")

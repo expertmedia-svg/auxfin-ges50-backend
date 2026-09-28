@@ -29,7 +29,7 @@ Fonctions existantes :
 - Import dashboard et rapprochements : comparaison avec un export du système principal,
   pas une connexion en temps réel à ce système. Conforme est différent de sync visible.
 - Gaps et rapports : anomalies du rapprochement ; consulter sa période et son exécution.
-- Applications : profils de détection spécifiques. AgriCoach upload ET download cochés,
+- Applications : profils de détection spécifiques. AgriCoach Data / upload cochée suffit, download facultatif,
   YebCoach Data cochée suffit, PFNL première case Upload Data verte, Finance petit badge vert.
 - Agents : registre identité/localité ; aucune affectation obligatoire pour le contrôle.
   Les participants sont observés via les preuves ; un agent jamais observé reste inconnu.

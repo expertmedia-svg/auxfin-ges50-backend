@@ -12,8 +12,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "agricoach_checks"
 LABELS = "AgriCoach upload_data download_data download_media"
 
 
-@pytest.mark.parametrize("filename,expected", [("both_checked.jpg", True), ("upload_only.jpg", False), ("home.jpg", False)])
-def test_real_frames_require_both_checks(filename, expected):
+@pytest.mark.parametrize("filename,expected", [("both_checked.jpg", True), ("upload_only.jpg", True), ("home.jpg", False)])
+def test_real_frames_require_upload_check(filename, expected):
     assert detect_agricoach_status(str(FIXTURES / filename), LABELS).confirmed is expected
 
 
@@ -48,8 +48,8 @@ def test_error_after_checks_remains_failure(monkeypatch):
     assert outcome.sync_status == SyncStatus.FAILED
 
 
-def test_success_keyword_without_both_checks_does_not_confirm_agricoach(monkeypatch):
+def test_success_keyword_without_data_check_does_not_confirm_agricoach(monkeypatch):
     monkeypatch.setattr(pipeline, "run_ocr_on_image_path",
                         lambda _: [OcrEngineResult("test", "original", LABELS + " success", .9)])
-    outcome = pipeline.extract_from_image(str(FIXTURES / "upload_only.jpg"), ["success"], [], application_code="agricoach")
+    outcome = pipeline.extract_from_image(str(FIXTURES / "home.jpg"), ["success"], [], application_code="agricoach")
     assert outcome.sync_status == SyncStatus.UNCONFIRMED
