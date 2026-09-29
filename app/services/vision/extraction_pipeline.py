@@ -351,6 +351,12 @@ def extract_from_video(
             outcome.frame_debug = frame_debug
             outcome.video_metadata = metadata
             evaluate_sync_frames(outcome, success_keywords, error_keywords, status_icon_zone, application_code)
+    if application_code == "financecoach":
+        from app.services.vision.financecoach_status import scan_finance_video
+        for timestamp, path in scan_finance_video(video_path, frames_output_dir, evidence_id):
+            outcome.extracted_frames.append(ExtractedFrame("middle", timestamp, path))
+            outcome.frame_debug.append(FrameOcrDebug("middle", timestamp, path, "", 0.0, "visual"))
+        evaluate_sync_frames(outcome, success_keywords, error_keywords, status_icon_zone, application_code)
     if outcome.normalized_group_id is None:
         outcome.review_reasons.append(
             "Aucun identifiant fiable trouve dans les frames de debut analysees"

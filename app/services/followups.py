@@ -99,6 +99,7 @@ def matches(db: Session, original: EvidenceFile, replacement: EvidenceFile) -> b
     # Aucun rapprochement automatique par le seul nom / téléphone : un agent
     # peut envoyer plusieurs applications, groupes et périodes le même jour.
     return bool(usable(replacement) and same_sender(db, original, replacement)
+                and original.application_id is not None
                 and original.application_id == replacement.application_id
                 and utc_naive(replacement.received_at) >= utc_naive(original.received_at)
                 and a and b and not b.date_is_ambiguous and a.effective_group_id and a.effective_date and not a.date_is_ambiguous
