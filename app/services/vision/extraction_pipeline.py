@@ -133,7 +133,7 @@ def extract_from_image(
                                          "+".join(sorted({r.engine for r in ocr_results})))]
     if status_icon_zone:
         apply_icon_confirmation(outcome, image_path, status_icon_zone)
-    if application_code in ("agricoach", "pfnlcoach", "yebcoach"):
+    if application_code in ("agricoach", "pfnlcoach", "yebcoach", "financecoach"):
         evaluate_sync_frames(outcome, success_keywords, error_keywords,
                              icon_zone=status_icon_zone, application_code=application_code)
     return outcome
@@ -184,24 +184,29 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
         if application_code in ("pfnlcoach", "yebcoach") and result.status != SyncStatus.FAILED:
             normalized = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
             labels = re.sub(r"[^a-z]", "", normalized)
-            image = load_image_corrected(frame.path)
-            height, width = image.shape[:2]
-            calibrated_layout = 1.52 <= width / height <= 1.68
             if application_code == "pfnlcoach":
-                if "uploaddata" in labels:
-                    zone = {"x": .48, "y": .20, "w": .11, "h": .13}
-                    confirmed = calibrated_layout and detect_status_icon_color(frame.path, zone).is_green
+                from app.services.vision.pfnl_status import detect_pfnl_check
+                confirmed = detect_pfnl_check(frame.path)
+                if confirmed or "uploaddata" in labels or "telechargerlesdonnees" in labels:
                     latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
-                              "PFNLCoach : Upload Data avec coche verte" if confirmed else
-                              "PFNLCoach : coche verte Upload Data non confirmee", .85 if confirmed else 0.0)
+                              "PFNLCoach : premiere coche detectee visuellement (independante de la langue)" if confirmed else
+                              "PFNLCoach : premiere coche non confirmee", .85 if confirmed else 0.0)
             else:
-                from app.services.vision.yebcoach_status import detect_yebcoach_data_checked
-                if "data" in labels or "donnees" in labels:
-                    confirmed = detect_yebcoach_data_checked(frame.path, frame.raw_text)
+                from app.services.vision.yebcoach_status import detect_yebcoach_data_state
+                confirmed = detect_yebcoach_data_state(frame.path)
+                if confirmed is not None:
                     latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
                               "YEBCoach : case Data cochee" if confirmed else
                               "YEBCoach : case Data non confirmee", .85 if confirmed else 0.0)
             # Un libellé ou un badge isolé ne contourne pas la règle spécifique.
+            continue
+        if application_code == "financecoach" and result.status != SyncStatus.FAILED:
+            from app.services.vision.financecoach_status import detect_financecoach_status
+            confirmed = detect_financecoach_status(frame.path)
+            if confirmed is not None:
+                latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
+                          "FinanceCoach : badge vert de synchronisation confirme" if confirmed else
+                          "FinanceCoach : badge de synchronisation non confirme", .85 if confirmed else 0.0)
             continue
         if application_code == "agricoach" and result.status != SyncStatus.FAILED:
             from app.services.vision.agricoach_status import detect_agricoach_status

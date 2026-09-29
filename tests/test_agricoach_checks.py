@@ -17,8 +17,10 @@ def test_real_frames_require_upload_check(filename, expected):
     assert detect_agricoach_status(str(FIXTURES / filename), LABELS).confirmed is expected
 
 
-def test_labels_required_even_with_green_checks():
-    assert not detect_agricoach_status(str(FIXTURES / "both_checked.jpg"), "Guide Meteo").confirmed
+@pytest.mark.parametrize("text", ["", "Télécharger les données", "Guide Meteo"])
+def test_visual_check_does_not_require_english_ocr(text):
+    assert detect_agricoach_status(str(FIXTURES / "both_checked.jpg"), text).confirmed
+    assert not detect_agricoach_status(str(FIXTURES / "home.jpg"), text).confirmed
 
 
 def test_agricoach_confirmation_survives_return_home_and_does_not_apply_to_other_apps(monkeypatch):

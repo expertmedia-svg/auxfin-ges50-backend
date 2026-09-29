@@ -1,6 +1,4 @@
 """YEBCoach : case Data cochée, sans exigence sur Meta (règle opérateur)."""
-import re
-import unicodedata
 
 import cv2
 import numpy as np
@@ -8,16 +6,27 @@ import numpy as np
 from app.services.vision.preprocessing import load_image_corrected
 
 
-def detect_yebcoach_data_checked(path, text):
-    labels = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower()
-    if not re.search(r"\b(data|donnees)\b", labels):
-        return False
+def detect_yebcoach_data_state(path):
+    """True/False for a known Data panel, None for an unrelated screen."""
     image = load_image_corrected(path)
     height, width = image.shape[:2]
     if not 1.52 <= width / height <= 1.68:
-        return False
+        return None
     # Deux menus connus : Data première ligne, ou Données après Upload.
-    center_y = .418 if re.search(r"\bupload\b", labels) else .275
+    def red_disk(center):
+        crop = image[round((center-.032)*height):round((center+.032)*height),
+                     round(.606*width):round(.645*width)]
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        red = ((hsv[:,:,0] < 12) | (hsv[:,:,0] > 165)) & (hsv[:,:,1] > 90)
+        return float(np.count_nonzero(red)) / red.size > .25
+
+    # Three-row menu: Upload, Data, Boutique. Never mistake Upload for Data.
+    if red_disk(.418) and red_disk(.625):
+        center_y = .418
+    elif red_disk(.275) and not red_disk(.418):
+        center_y = .275
+    else:
+        return None
     surround = image[round((center_y - .032) * height):round((center_y + .032) * height),
                      round(.606 * width):round(.645 * width)]
     ring = cv2.cvtColor(surround, cv2.COLOR_BGR2HSV)
@@ -34,3 +43,8 @@ def detect_yebcoach_data_checked(path, text):
     ratio = float(np.count_nonzero(white)) / white.size
     return .30 < ratio < .95
 
+
+
+def detect_yebcoach_data_checked(path, text=""):
+    """Compatibility wrapper; translated OCR labels are not required."""
+    return detect_yebcoach_data_state(path) is True

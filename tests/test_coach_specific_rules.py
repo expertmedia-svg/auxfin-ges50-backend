@@ -39,7 +39,8 @@ def test_finance_existing_badge_rule_preserved(monkeypatch, filename, expected):
 
 
 @pytest.mark.parametrize("checked", [True, False])
-def test_yeb_data_first_checkbox_without_meta(tmp_path, checked):
+@pytest.mark.parametrize("text", ["", "Yeb Data", "Upload Synchroniser Données"])
+def test_yeb_data_first_checkbox_without_meta(tmp_path, checked, text):
     import cv2
     import numpy as np
     from app.services.vision.yebcoach_status import detect_yebcoach_data_checked
@@ -51,4 +52,35 @@ def test_yeb_data_first_checkbox_without_meta(tmp_path, checked):
         cv2.line(image, (399, 113), (404, 106), (65, 65, 185), 2)
     path = str(tmp_path / "data.png")
     cv2.imwrite(path, image)
-    assert detect_yebcoach_data_checked(path, "Yeb Data") is checked
+    assert detect_yebcoach_data_checked(path, text) is checked
+
+
+@pytest.mark.parametrize("checked", [True, False])
+def test_yeb_three_row_menu_uses_second_checkbox_without_ocr(tmp_path, checked):
+    import cv2
+    from app.services.vision.yebcoach_status import detect_yebcoach_data_checked
+    image = cv2.imread(str(FIXTURES_DIR / "yebcoach_sync_confirmed_green.jpg"))
+    # The real fixture has Upload checked but Data empty.
+    if checked:
+        cv2.rectangle(image, (394, 161), (406, 173), (255, 255, 255), -1)
+        cv2.line(image, (396, 167), (399, 170), (65, 65, 185), 2)
+        cv2.line(image, (399, 170), (404, 163), (65, 65, 185), 2)
+    path = str(tmp_path / "second.png")
+    cv2.imwrite(path, image)
+    assert detect_yebcoach_data_checked(path, "") is checked
+
+
+@pytest.mark.parametrize("app,filename,expected", [
+    ("financecoach", "financecoach_sync_confirmed_green.jpg", SyncStatus.SUCCESS),
+    ("financecoach", "financecoach_start_before_sync.jpg", SyncStatus.UNCONFIRMED),
+    ("financecoach", "yebcoach_sync_confirmed_green.jpg", SyncStatus.UNCONFIRMED),
+    ("yebcoach", "yebcoach_sync_confirmed_green.jpg", SyncStatus.UNCONFIRMED),
+    ("yebcoach", "yebcoach_final_menu_with_red_button.jpg", SyncStatus.UNCONFIRMED),
+])
+@pytest.mark.parametrize("text", ["", "Complété", "Completed"])
+def test_visual_rules_without_labels_or_configured_zone(monkeypatch, app, filename, expected, text):
+    monkeypatch.setattr(pipeline, "run_ocr_on_image_path",
+                        lambda _: [OcrEngineResult("test", "original", text, .9)])
+    result = pipeline.extract_from_image(str(FIXTURES_DIR / filename),
+                                        ["Complété", "Completed"], [], application_code=app)
+    assert result.sync_status == expected

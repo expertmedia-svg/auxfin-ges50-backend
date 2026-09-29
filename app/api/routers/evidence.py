@@ -521,12 +521,30 @@ def validate_evidence(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ) -> None:
-    _resolve_manual_review(db, evidence_id, user, ManualReviewDecision.VALIDATED, payload.comment)
     evidence = db.get(EvidenceFile, evidence_id)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Preuve introuvable")
+    _resolve_manual_review(db, evidence_id, user, ManualReviewDecision.VALIDATED, payload.comment)
     if evidence:
         evidence.processing_status = ProcessingStatus.COMPLETED
-        if evidence.extraction:
-            evidence.extraction.requires_manual_review = False
+        if evidence.extraction is None:
+            evidence.extraction = EvidenceExtraction(evidence_id=evidence.id)
+        extraction = evidence.extraction
+        extraction.correction_history = [*(extraction.correction_history or []), {
+            "corrected_by": user.id,
+            "corrected_at": datetime.now(UTC).isoformat(),
+            "previous_sync_status": extraction.sync_status,
+            "previous_sync_evidence": extraction.sync_status_evidence_text,
+            "new_sync_status": "SUCCESS",
+            "comment": payload.comment,
+            "source": "manual_validation",
+        }]
+        extraction.sync_status = "SUCCESS"
+        extraction.sync_status_evidence_text = "Synchronisation confirmee par validation manuelle"
+        extraction.requires_manual_review = False
+        extraction.manually_corrected_by_id = user.id
+        extraction.manually_corrected_at = datetime.now(UTC)
+        db.flush()
         from app.services.followups import update_followups
         update_followups(db, evidence)
     db.commit()

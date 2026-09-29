@@ -1,7 +1,8 @@
 """Règle AgriCoach : la coche Data / upload_data suffit ; download_data est facultatif.
 
 Calibrée sur la vidéo du 14/09/2026 fournie par l'opérateur (640 x 400).
-Les libellés OCR et la forme blanche des coches sont requis en plus du vert.
+La forme blanche de la coche est requise en plus du vert ; les libellés
+OCR ne sont pas nécessaires pour confirmer la coche dans ce menu connu.
 """
 import re
 from dataclasses import dataclass
@@ -55,12 +56,10 @@ def _checked(image: np.ndarray, x: float, y: float) -> bool:
 
 def detect_agricoach_status(path: str, text: str) -> AgriCoachStatus:
     labels = re.sub(r"[^a-z]", "", text.lower())
-    if "uploaddata" not in labels:
-        return AgriCoachStatus(False, False, False)
     image = load_image_corrected(path)
     height, width = image.shape[:2]
     if not 1.52 <= width / height <= 1.68:
         return AgriCoachStatus(False, False, False)
     upload = _checked(image, .61, .115)
     download = _checked(image, .61, .2175)
-    return AgriCoachStatus(upload, upload, download, True)
+    return AgriCoachStatus(upload, upload, download, upload or download or "uploaddata" in labels)
