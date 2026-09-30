@@ -4,7 +4,7 @@ import numpy as np
 from app.services.vision.preprocessing import load_image_corrected
 
 
-def detect_pfnl_check(path: str) -> bool:
+def detect_pfnl_check(path: str, *, any_operation: bool = False) -> bool:
     """Recognize the first checked disk in the known landscape PFNL panel.
 
     The caller must identify PFNLCoach first. Text is not needed; an unknown
@@ -25,7 +25,8 @@ def detect_pfnl_check(path: str) -> bool:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, np.array([30, 45, 25]), np.array([90, 255, 255]))
     # First operation only. The logo and subsequent operations are excluded.
-    roi = mask[int(.18*h):int(.36*h), int(.47*w):int(.58*w)]
+    top, bottom, left, right = (.10, .85, .47, .95) if any_operation else (.18, .36, .47, .58)
+    roi = mask[int(top*h):int(bottom*h), int(left*w):int(right*w)]
     cleaned = cv2.morphologyEx(roi, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for contour in contours:
@@ -34,7 +35,7 @@ def detect_pfnl_check(path: str) -> bool:
             continue
         if cv2.contourArea(contour) < .5*cw*ch:
             continue
-        x += int(.47*w); y += int(.18*h)
+        x += int(left*w); y += int(top*h)
         crop = hsv[y:y+ch, x:x+cw]
         # White check inside a filled green disk, not a green disk alone.
         white = ((crop[:,:,1] < 105) & (crop[:,:,2] > max(50, np.median(crop[:,:,2])*1.15))).astype('uint8')

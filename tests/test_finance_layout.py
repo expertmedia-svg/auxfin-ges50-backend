@@ -17,7 +17,7 @@ def test_layout_resize_and_letterboxing(tmp_path, size, padding, confirmed):
 
 
 @pytest.mark.parametrize("name,expected", [("t24.jpg", False), ("t27.jpg", True),
-    ("second12.jpg", False), ("second1825.jpg", True), ("second185.jpg", None)])
+    ("second12.jpg", True), ("second1825.jpg", True), ("second185.jpg", None)])
 def test_reported_real_video_frames(name, expected):
     path = Path(__file__).parent / "fixtures/finance_regression" / name
     assert detect_financecoach_status(str(path)) is expected

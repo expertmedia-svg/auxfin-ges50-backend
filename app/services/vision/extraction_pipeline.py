@@ -133,7 +133,7 @@ def extract_from_image(
                                          "+".join(sorted({r.engine for r in ocr_results})))]
     if status_icon_zone:
         apply_icon_confirmation(outcome, image_path, status_icon_zone)
-    if application_code in ("agricoach", "pfnlcoach", "yebcoach", "financecoach"):
+    if application_code and application_code.endswith("coach"):
         evaluate_sync_frames(outcome, success_keywords, error_keywords,
                              icon_zone=status_icon_zone, application_code=application_code)
     return outcome
@@ -193,6 +193,15 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
         if notification_panel:
             continue
         result = detect_sync_status(frame.raw_text, success_keywords, error_keywords)
+        # Operator rule: any visible completed operation suffices for eCoach.
+        # Keep explicit failures, but do not lose a check on returning home.
+        if application_code and application_code.endswith("coach") and result.status != SyncStatus.FAILED:
+            from app.services.vision.pfnl_status import detect_pfnl_check
+            if detect_pfnl_check(frame.path, any_operation=True):
+                latest = (SyncStatus.SUCCESS, "eCoach : une coche de réussite visible suffit (Data facultatif)", .95)
+                continue
+            if latest[0] == SyncStatus.SUCCESS:
+                continue
         if application_code in ("pfnlcoach", "yebcoach") and result.status != SyncStatus.FAILED:
             normalized = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
             labels = re.sub(r"[^a-z]", "", normalized)
@@ -205,11 +214,11 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
                               "PFNLCoach : premiere coche non confirmee", .85 if confirmed else 0.0)
             else:
                 from app.services.vision.yebcoach_status import detect_yebcoach_data_state
-                confirmed = detect_yebcoach_data_state(frame.path)
+                confirmed = detect_yebcoach_data_state(frame.path, any_operation=True)
                 if confirmed is not None:
                     latest = (SyncStatus.SUCCESS if confirmed else SyncStatus.UNCONFIRMED,
-                              "YEBCoach : case Data cochee" if confirmed else
-                              "YEBCoach : case Data non confirmee", .85 if confirmed else 0.0)
+                              "YEBCoach : une operation cochee" if confirmed else
+                              "YEBCoach : aucune coche confirmee", .85 if confirmed else 0.0)
             # Un libellé ou un badge isolé ne contourne pas la règle spécifique.
             continue
         if application_code == "financecoach" and result.status != SyncStatus.FAILED:

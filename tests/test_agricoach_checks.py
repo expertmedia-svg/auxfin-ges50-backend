@@ -23,7 +23,7 @@ def test_visual_check_does_not_require_english_ocr(text):
     assert not detect_agricoach_status(str(FIXTURES / "home.jpg"), text).confirmed
 
 
-def test_agricoach_confirmation_survives_return_home_and_does_not_apply_to_other_apps(monkeypatch):
+def test_coach_confirmation_survives_return_home(monkeypatch):
     monkeypatch.setattr(pipeline, "run_ocr_on_image_path", lambda _: [OcrEngineResult("test", "original", LABELS, .9)])
     outcome = pipeline.extract_from_image(str(FIXTURES / "both_checked.jpg"), [], [])
     outcome.video_metadata = VideoMetadata(47.5, 640, 400)
@@ -35,7 +35,7 @@ def test_agricoach_confirmation_survives_return_home_and_does_not_apply_to_other
     assert outcome.sync_status == SyncStatus.SUCCESS
     for app in [None, "financecoach", "pfnlcoach", "yebcoach"]:
         pipeline.evaluate_sync_frames(outcome, [], [], application_code=app)
-        assert outcome.sync_status == SyncStatus.UNCONFIRMED
+        assert outcome.sync_status == (SyncStatus.UNCONFIRMED if app is None else SyncStatus.SUCCESS)
 
 
 def test_error_after_checks_remains_failure(monkeypatch):

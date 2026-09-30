@@ -17,13 +17,12 @@ def test_pfnl_upload_label_needs_green_first_checkbox(monkeypatch, filename, exp
     assert result.sync_status == expected
 
 
-def test_yeb_old_upload_badge_does_not_confirm_data_and_meta(monkeypatch):
+def test_yeb_upload_check_suffices_without_data_and_meta(monkeypatch):
     monkeypatch.setattr(pipeline, "run_ocr_on_image_path",
                         lambda _: [OcrEngineResult("test", "original", "Upload Synchroniser Données Méta success", .9)])
     result = pipeline.extract_from_image(str(FIXTURES_DIR / "yebcoach_sync_confirmed_green.jpg"), ["success"], [],
                                           application_code="yebcoach", status_icon_zone=YEBCOACH_ICON_ZONE)
-    assert result.sync_status == SyncStatus.UNCONFIRMED
-    assert "Data" in result.sync_status_evidence_text
+    assert result.sync_status == SyncStatus.SUCCESS
 
 
 @pytest.mark.parametrize("filename,expected", [
@@ -74,7 +73,7 @@ def test_yeb_three_row_menu_uses_second_checkbox_without_ocr(tmp_path, checked):
     ("financecoach", "financecoach_sync_confirmed_green.jpg", SyncStatus.SUCCESS),
     ("financecoach", "financecoach_start_before_sync.jpg", SyncStatus.UNCONFIRMED),
     ("financecoach", "yebcoach_sync_confirmed_green.jpg", SyncStatus.UNCONFIRMED),
-    ("yebcoach", "yebcoach_sync_confirmed_green.jpg", SyncStatus.UNCONFIRMED),
+    ("yebcoach", "yebcoach_sync_confirmed_green.jpg", SyncStatus.SUCCESS),
     ("yebcoach", "yebcoach_final_menu_with_red_button.jpg", SyncStatus.UNCONFIRMED),
 ])
 @pytest.mark.parametrize("text", ["", "Complété", "Completed"])
@@ -84,3 +83,13 @@ def test_visual_rules_without_labels_or_configured_zone(monkeypatch, app, filena
     result = pipeline.extract_from_image(str(FIXTURES_DIR / filename),
                                         ["Complété", "Completed"], [], application_code=app)
     assert result.sync_status == expected
+
+
+@pytest.mark.parametrize("app", ["agricoach", "financecoach", "pfnlcoach", "yebcoach", "watercoach"])
+def test_one_download_check_suffices_for_every_coach(monkeypatch, app):
+    from pathlib import Path
+    monkeypatch.setattr(pipeline, "run_ocr_on_image_path",
+                        lambda _: [OcrEngineResult("test", "original", "", .9)])
+    path = Path(__file__).parent / "fixtures/agricoach_checks/download_only.jpg"
+    result = pipeline.extract_from_image(str(path), [], [], application_code=app)
+    assert result.sync_status == SyncStatus.SUCCESS

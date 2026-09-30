@@ -61,15 +61,8 @@ def _detect_image(image):
                 found.append((bx+bw/2, by+bh/2))
         if not data_menu:
             return bool(found)
-        # Data-only menu: all six suboperations must be finished.
-        if len(found) == 6:
-            found.sort(key=lambda p: p[1])
-            spacing = np.diff([p[1] for p in found])
-            if (max(p[0] for p in found)-min(p[0] for p in found) < diameter*.4
-                    and spacing.min() > diameter*.35
-                    and spacing.max() < spacing.min()*1.5):
-                return True
-        return False
+        # Operator rule: one completed suboperation is sufficient.
+        return bool(found)
     return None
 
 

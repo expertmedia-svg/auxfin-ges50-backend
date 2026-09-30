@@ -95,7 +95,7 @@ def process_evidence(db: Session, evidence_id: str) -> EvidenceFile:
         if settings.groq_vision_enabled and settings.groq_api_key:
             from app.services.vision.groq_vision import observe
             frames = outcome.extracted_frames
-            chosen = [frames[i] for i in sorted({0, len(frames) // 2, len(frames) - 1})] if frames else []
+            chosen = observation_frames(outcome)
             observations = []
             for frame in chosen:
                 observation = observe(str(frame.path))
@@ -175,6 +175,13 @@ def _run_pipeline(db: Session, evidence: EvidenceFile) -> tuple[ExtractionOutcom
         matched_profile = next(p for p in all_profiles if p.application_id == detection.application_id)
         # Rafine le statut de synchronisation avec les mots-cles specifiques de
         # l'application detectee, sans nouvelle extraction video/OCR.
+        if matched_profile.application.code == "financecoach" and evidence.media_type == EvidenceType.VIDEO:
+            from app.services.vision.financecoach_status import scan_finance_video
+            from app.services.video.frame_extractor import ExtractedFrame
+            from app.services.vision.extraction_pipeline import FrameOcrDebug
+            for timestamp, path in scan_finance_video(resolved_path, str(settings.frames_dir / evidence.id), evidence.id):
+                outcome.extracted_frames.append(ExtractedFrame("middle", timestamp, path))
+                outcome.frame_debug.append(FrameOcrDebug("middle", timestamp, path, "", 0.0, "visual"))
         evaluate_sync_frames(outcome, matched_profile.success_keywords, matched_profile.error_keywords,
                              (matched_profile.screen_zones or {}).get("sync_status_icon"), matched_profile.application.code)
 
@@ -186,6 +193,22 @@ def _run_pipeline(db: Session, evidence: EvidenceFile) -> tuple[ExtractionOutcom
     outcome.sync_status_evidence_text = None
     outcome.review_reasons.append("Application non identifiee automatiquement")
     return outcome, None
+
+
+def observation_frames(outcome):
+    """Include visual state transitions rather than arbitrary list positions."""
+    frames = outcome.extracted_frames
+    visual_paths = [f.path for f in outcome.frame_debug if f.engine == "visual"]
+    by_path = {f.path: f for f in frames}
+    preferred = [by_path[p] for p in reversed(visual_paths) if p in by_path]
+    fallback = [frames[i] for i in sorted({0, len(frames)//2, len(frames)-1})] if frames else []
+    chosen = []
+    for frame in preferred + fallback:
+        if frame.path not in {f.path for f in chosen}:
+            chosen.append(frame)
+        if len(chosen) == 3:
+            break
+    return chosen
 
 
 def _resolve_storage_path(evidence: EvidenceFile):

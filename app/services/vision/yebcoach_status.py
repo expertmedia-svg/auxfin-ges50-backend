@@ -6,12 +6,26 @@ import numpy as np
 from app.services.vision.preprocessing import load_image_corrected
 
 
-def detect_yebcoach_data_state(path):
+def detect_yebcoach_data_state(path, *, any_operation=False):
     """True/False for a known Data panel, None for an unrelated screen."""
     image = load_image_corrected(path)
     height, width = image.shape[:2]
     if not 1.52 <= width / height <= 1.68:
         return None
+    if any_operation:
+        # Known operation rows, including Upload before Data.
+        for center in (.275, .418, .625):
+            crop = image[round((center-.012)*height):round((center+.012)*height),
+                         round(.618*width):round(.633*width)]
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            white = cv2.inRange(hsv, np.array([0, 0, 180]), np.array([179, 65, 255]))
+            ratio = float(np.count_nonzero(white)) / white.size
+            ring = image[round((center-.032)*height):round((center+.032)*height),
+                         round(.606*width):round(.645*width)]
+            hsv_ring = cv2.cvtColor(ring, cv2.COLOR_BGR2HSV)
+            red = ((hsv_ring[:,:,0] < 12) | (hsv_ring[:,:,0] > 165)) & (hsv_ring[:,:,1] > 90)
+            if red.mean() > .25 and .30 < ratio < .95:
+                return True
     # Deux menus connus : Data première ligne, ou Données après Upload.
     def red_disk(center):
         crop = image[round((center-.032)*height):round((center+.032)*height),
