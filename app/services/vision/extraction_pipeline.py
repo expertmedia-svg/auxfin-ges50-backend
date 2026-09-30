@@ -180,6 +180,18 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
     duration = outcome.video_metadata.duration_seconds if outcome.video_metadata else 0
     for frame in sorted((f for f in outcome.frame_debug if f.position in ("middle", "end")),
                         key=lambda f: duration - f.offset_seconds if f.position == "end" else f.offset_seconds):
+        # Android notifications can contain unrelated transfer failures after
+        # the user leaves the application to stop the screen recording.
+        folded = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
+        notification_panel = (
+            ("enregistrement de l'ecran" in folded or "screen recording" in folded
+             or "enregistrement d'ecran" in folded)
+            and ("bluetooth" in folded or "mode avion" in folded or "airplane mode" in folded)
+            and ("notifications" in folded or "effacer" in folded or "gerer" in folded
+                 or "clear all" in folded or "economiseur" in folded)
+        )
+        if notification_panel:
+            continue
         result = detect_sync_status(frame.raw_text, success_keywords, error_keywords)
         if application_code in ("pfnlcoach", "yebcoach") and result.status != SyncStatus.FAILED:
             normalized = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
