@@ -23,7 +23,8 @@ def detect_check_image(image, *, any_operation=False, watercoach=False):
     image = image[ys[0]:ys[-1]+1, xs[0]:xs[-1]+1]
     image = cv2.resize(image, (960, round(image.shape[0] * 960 / image.shape[1])))
     h, w = image.shape[:2]
-    if not 1.3 < w/h < 2.1:
+    portrait = .45 < w/h < .9
+    if not portrait and not 1.3 < w/h < 2.1:
         return False
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, np.array([30, 45, 25]), np.array([120 if watercoach else 90, 255, 255]))
@@ -31,12 +32,15 @@ def detect_check_image(image, *, any_operation=False, watercoach=False):
     top, bottom, roi_left, roi_right = (.10, .85, .47, .95) if any_operation else (.18, .36, .47, .58)
     if watercoach:
         top, bottom, roi_left, roi_right = .20, .82, .55, .98
+    if portrait:
+        top, bottom, roi_left, roi_right = .25, .72, .07, .95
+    scale = min(h, w)
     roi = mask[int(top*h):int(bottom*h), int(roi_left*w):int(roi_right*w)]
     cleaned = cv2.morphologyEx(roi, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for contour in contours:
         x, y, cw, ch = cv2.boundingRect(contour)
-        if not .7 < cw/max(ch,1) < 1.4 or not .025*h < ch < .08*h:
+        if not .7 < cw/max(ch,1) < 1.4 or not .025*scale < ch < .08*scale:
             continue
         if cv2.contourArea(contour) < .5*cw*ch:
             continue
