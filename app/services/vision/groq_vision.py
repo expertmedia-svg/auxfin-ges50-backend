@@ -57,7 +57,7 @@ def observe(image_path: str) -> dict | None:
                             "Les mentions de marque AUXFIN et BURKINA FASO ne sont pas une localité. "
                             "Ne transforme pas un texte de date en localité. "
                             "evidence_text cite les mots ou décrit précisément les icônes qui justifient la lecture. "
-                            "Pour toutes les applications eCoach (AgriCoach, FinanceCoach, PFNLCoach, YEBCoach, etc.), "
+                            "Pour toutes les applications eCoach (AgriCoach, FinanceCoach, PFNLCoach, YEBCoach, WaterCoach, etc.), "
                             "une seule coche de réussite visible dans le panneau de synchronisation suffit, quelle que soit la ligne : "
                             "upload, download_data, Data, métadonnées ou médias. Data peut rester vide. "
                             "Cette règle est indépendante de la langue. Décris la coche et sa position. "

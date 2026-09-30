@@ -13,7 +13,7 @@ def detect_pfnl_check(path: str, *, any_operation: bool = False) -> bool:
     return detect_check_image(load_image_corrected(path), any_operation=any_operation)
 
 
-def detect_check_image(image, *, any_operation=False):
+def detect_check_image(image, *, any_operation=False, watercoach=False):
     # Remove black letterboxing, retaining the complete visible application.
     active = np.max(image, axis=2) > 18
     ys = np.where(active.mean(axis=1) > .3)[0]
@@ -26,9 +26,11 @@ def detect_check_image(image, *, any_operation=False):
     if not 1.3 < w/h < 2.1:
         return False
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, np.array([30, 45, 25]), np.array([90, 255, 255]))
+    mask = cv2.inRange(hsv, np.array([30, 45, 25]), np.array([120 if watercoach else 90, 255, 255]))
     # First operation only. The logo and subsequent operations are excluded.
     top, bottom, roi_left, roi_right = (.10, .85, .47, .95) if any_operation else (.18, .36, .47, .58)
+    if watercoach:
+        top, bottom, roi_left, roi_right = .20, .82, .55, .98
     roi = mask[int(top*h):int(bottom*h), int(roi_left*w):int(roi_right*w)]
     cleaned = cv2.morphologyEx(roi, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

@@ -203,6 +203,13 @@ def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str]
                 continue
             if latest[0] == SyncStatus.SUCCESS:
                 continue
+        if application_code == "watercoach" and result.status != SyncStatus.FAILED:
+            from app.services.vision.pfnl_status import detect_check_image
+            from app.services.vision.preprocessing import load_image_corrected
+            if detect_check_image(load_image_corrected(frame.path), watercoach=True):
+                latest = (SyncStatus.SUCCESS, "WaterCoach : coche blanche sur disque bleu ou vert", .95)
+            # A translated label or a button colour alone cannot confirm WaterCoach.
+            continue
         if application_code in ("pfnlcoach", "yebcoach") and result.status != SyncStatus.FAILED:
             normalized = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
             labels = re.sub(r"[^a-z]", "", normalized)

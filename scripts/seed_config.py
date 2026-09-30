@@ -1,6 +1,6 @@
 """Seed des elements techniques necessaires au demarrage : roles, permissions
-de base, et les 4 profils d'application eCoach reels (FinanceCoach, PFNLCoach,
-YEBCoach, AgriCoach), configures a partir de l'inspection reelle des 4 videos
+de base, et les profils d'application eCoach reels (FinanceCoach, PFNLCoach,
+YEBCoach, AgriCoach) et WaterCoach. Profils historiques configures a partir de l'inspection reelle des 4 videos
 fournies (aucune donnee metier fictive n'est creee)."""
 
 from __future__ import annotations
@@ -130,6 +130,17 @@ APPLICATION_PROFILES = [
         "primary_color_hint": "#388E3C",
         "screen_zones": {"id_date_header": {"x": 0.3, "y": 0.0, "w": 0.7, "h": 0.08}},
     },
+    {
+        "code": "watercoach",
+        "name": "WaterCoach",
+        "expected_evidence_type": "video",
+        "success_keywords": ["donnees synchronisees", "synchronisation terminee", "success", "completed"],
+        "error_keywords": ["echec", "erreur", "failed", "error"],
+        "logo_keywords": ["watercoach", "water coach"],
+        # No invented colour or icon coordinates: use the shared check detector.
+        "primary_color_hint": None,
+        "screen_zones": {},
+    },
 ]
 
 
@@ -174,7 +185,7 @@ def run() -> None:
             profile.screen_zones = profile_data["screen_zones"]
 
         db.commit()
-        print("Seed de configuration termine : roles, permissions et 4 profils d'application reels.")
+        print("Seed de configuration termine : roles, permissions et profils d'application.")
     finally:
         db.close()
 
