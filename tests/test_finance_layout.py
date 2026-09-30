@@ -16,7 +16,7 @@ def test_layout_resize_and_letterboxing(tmp_path, size, padding, confirmed):
     assert (detect_financecoach_status(path) is True) == confirmed
 
 
-@pytest.mark.parametrize("name,expected", [("t24.jpg", False), ("t27.jpg", True),
+@pytest.mark.parametrize("name,expected", [("t24.jpg", True), ("t27.jpg", True),
     ("second12.jpg", True), ("second1825.jpg", True), ("second185.jpg", None)])
 def test_reported_real_video_frames(name, expected):
     path = Path(__file__).parent / "fixtures/finance_regression" / name
@@ -33,3 +33,13 @@ def test_brief_success_before_android_menu_is_retained(tmp_path):
     writer.release()
     frames = scan_finance_video(video, str(tmp_path), "test")
     assert [detect_financecoach_status(path) for _, path in frames] == [False, True]
+
+
+def test_empty_and_solid_blue_boxes_are_not_ticks():
+    import numpy as np
+    from app.services.vision.financecoach_status import _tick_shape
+    assert not _tick_shape(np.zeros((20,20), dtype=np.uint8))
+    assert not _tick_shape(np.full((20,20),255, dtype=np.uint8))
+    ring = np.zeros((20,20), dtype=np.uint8)
+    cv2.rectangle(ring,(1,1),(18,18),255,2)
+    assert not _tick_shape(ring)

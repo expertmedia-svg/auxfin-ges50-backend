@@ -47,6 +47,13 @@ def _detect_image(image):
         data_menu = 4.5 < gap/diameter < 7
         if not (1.2 < gap/diameter < 3 or data_menu):
             continue
+        # A checked operation box itself now suffices, even without a badge.
+        for cx, cy, size in [first, *below]:
+            inside = hsv[max(0, round(cy-size*.22)):round(cy+size*.22),
+                         max(0, round(cx-size*.22)):round(cx+size*.22)]
+            ink = cv2.inRange(inside, np.array([85, 80, 65]), np.array([120, 255, 255]))
+            if _tick_shape(ink):
+                return True
         crop = hsv[max(0, int(y)):min(h, int(second[1])),
                    max(0, int(x+diameter)):min(w, int(x+8*diameter))]
         if not crop.size:
@@ -65,6 +72,23 @@ def _detect_image(image):
         return bool(found)
     return None
 
+
+
+def _tick_shape(mask):
+    if not mask.size:
+        return False
+    count, components, stats, _ = cv2.connectedComponentsWithStats(mask)
+    for i in range(1, count):
+        x, y, w, h, area = stats[i]
+        if w < mask.shape[1]*.45 or h < mask.shape[0]*.25 or not .06 < area/mask.size < .65:
+            continue
+        yy, xx = np.where(components == i)
+        left = yy[xx < x+w*.2]
+        middle = yy[(xx >= x+w*.2) & (xx < x+w*.5)]
+        right = yy[xx >= x+w*.75]
+        if len(left) and len(middle) and len(right) and middle.mean() > left.mean() and middle.mean() > right.mean()+h*.1:
+            return True
+    return False
 
 def scan_finance_video(video_path, output_dir, evidence_id):
     """Bounded visual scan; save state changes only, without running extra OCR."""

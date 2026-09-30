@@ -93,3 +93,9 @@ def test_one_download_check_suffices_for_every_coach(monkeypatch, app):
     path = Path(__file__).parent / "fixtures/agricoach_checks/download_only.jpg"
     result = pipeline.extract_from_image(str(path), [], [], application_code=app)
     assert result.sync_status == SyncStatus.SUCCESS
+
+
+def test_yeb_check_with_android_navigation_strip(monkeypatch):
+    monkeypatch.setattr(pipeline, "run_ocr_on_image_path", lambda _: [OcrEngineResult("test", "original", "", .9)])
+    result = pipeline.extract_from_image(str(FIXTURES_DIR / "yebcoach_navigation_strip.jpg"), [], [], application_code="yebcoach")
+    assert result.sync_status == SyncStatus.SUCCESS

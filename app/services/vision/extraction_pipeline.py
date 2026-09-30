@@ -175,17 +175,18 @@ def refresh_sync_review(outcome: ExtractionOutcome) -> None:
 def evaluate_sync_frames(outcome: ExtractionOutcome, success_keywords: list[str],
                          error_keywords: list[str], icon_zone: dict | None = None,
                          application_code: str | None = None) -> None:
-    """Dernier état explicite, dans l'ordre temporel, sans utiliser le début de vidéo."""
+    """Dernier état explicite, dans l'ordre temporel, début inclus."""
     latest = (SyncStatus.UNCONFIRMED, None, 0.0)
     duration = outcome.video_metadata.duration_seconds if outcome.video_metadata else 0
-    for frame in sorted((f for f in outcome.frame_debug if f.position in ("middle", "end")),
+    for frame in sorted((f for f in outcome.frame_debug if f.position in ("start", "middle", "end")),
                         key=lambda f: duration - f.offset_seconds if f.position == "end" else f.offset_seconds):
         # Android notifications can contain unrelated transfer failures after
         # the user leaves the application to stop the screen recording.
         folded = unicodedata.normalize("NFKD", frame.raw_text).encode("ascii", "ignore").decode().lower()
         notification_panel = (
             ("enregistrement de l'ecran" in folded or "screen recording" in folded
-             or "enregistrement d'ecran" in folded)
+             or "enregistrement d'ecran" in folded
+             or ("notifications silencieuses" in folded and "tout effacer" in folded))
             and ("bluetooth" in folded or "mode avion" in folded or "airplane mode" in folded)
             and ("notifications" in folded or "effacer" in folded or "gerer" in folded
                  or "clear all" in folded or "economiseur" in folded)

@@ -9,6 +9,11 @@ from app.services.vision.preprocessing import load_image_corrected
 def detect_yebcoach_data_state(path, *, any_operation=False):
     """True/False for a known Data panel, None for an unrelated screen."""
     image = load_image_corrected(path)
+    if any_operation:
+        # Android's black navigation strip shifts the checkbox horizontally.
+        xs = np.where((np.max(image, axis=2) > 18).mean(axis=0) > .3)[0]
+        if len(xs):
+            image = image[:, xs[0]:xs[-1]+1]
     height, width = image.shape[:2]
     if not 1.52 <= width / height <= 1.68:
         return None

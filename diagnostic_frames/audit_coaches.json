@@ -1,0 +1,72 @@
+[
+  {
+    "video": "0aff9b90-60b8-4ed7-9a0c-ddfe9224a2b6",
+    "duration": 13.13,
+    "check_first": 0.0,
+    "check_frames": 25,
+    "finance_first": null
+  },
+  {
+    "video": "42ff460d-8f42-410f-b769-22514c17532c",
+    "duration": 16.95,
+    "check_first": 0.0,
+    "check_frames": 54,
+    "finance_first": null
+  },
+  {
+    "video": "50bf83b1-0a89-48c5-a080-c67b148575ce",
+    "duration": 15.48,
+    "check_first": null,
+    "check_frames": 0,
+    "finance_first": null
+  },
+  {
+    "video": "5e964505-dc35-405a-9505-340ca8d29ff3",
+    "duration": 103.63,
+    "check_first": 0.25,
+    "check_frames": 82,
+    "finance_first": 0.0
+  },
+  {
+    "video": "7a458c65-71ed-46fb-9f1a-11a8f914ca82",
+    "duration": 14.11,
+    "check_first": null,
+    "check_frames": 0,
+    "finance_first": null
+  },
+  {
+    "video": "8713346f-e5c0-4a13-a7b2-dbccbd7b2d81",
+    "duration": 9.57,
+    "check_first": null,
+    "check_frames": 0,
+    "finance_first": 6.75
+  },
+  {
+    "video": "8872dd51-d976-4ae0-a2d4-2627fb1c28f5",
+    "duration": 49.15,
+    "check_first": null,
+    "check_frames": 0,
+    "finance_first": 32.0
+  },
+  {
+    "video": "9245894b-9989-42fb-b8fa-9182a92aaf8a",
+    "duration": 205.93,
+    "check_first": null,
+    "check_frames": 0,
+    "finance_first": null
+  },
+  {
+    "video": "c6c14702-251b-4ec6-a34a-80c35d874e14",
+    "duration": 20.93,
+    "check_first": 4.5,
+    "check_frames": 1,
+    "finance_first": 1.25
+  },
+  {
+    "video": "e91b0f32-2b49-4821-86ef-75500e14a749",
+    "duration": 73.5,
+    "check_first": 2.25,
+    "check_frames": 278,
+    "finance_first": null
+  }
+]
